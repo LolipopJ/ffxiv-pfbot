@@ -4,7 +4,7 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { RE2JS } from "re2js";
 
-import { CATEGORY_LABEL, DATA_CENTRE } from "../constants";
+import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../locales/zh-cn";
 import type { Category } from "../types/recruitment";
 import { logger } from "../utils/logger";
 
@@ -137,7 +137,7 @@ export class SubscriptionStore {
     if (keywordError) return { ok: false as const, reason: keywordError };
     const dataCentres = [...new Set(filters.dataCentres ?? [])].sort();
     const categories = [...new Set(filters.categories ?? [])].sort();
-    if (dataCentres.some((value) => !Object.hasOwn(DATA_CENTRE, value)))
+    if (dataCentres.some((value) => !Object.hasOwn(DATA_CENTRE_LABEL, value)))
       return { ok: false as const, reason: "无效的数据中心" };
     if (categories.some((value) => !Object.hasOwn(CATEGORY_LABEL, value)))
       return { ok: false as const, reason: "无效的招募类别" };

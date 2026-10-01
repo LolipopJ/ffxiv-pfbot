@@ -1,8 +1,9 @@
 import { EmbedBuilder, escapeMarkdown } from "discord.js";
 
-import { CATEGORY_LABEL } from "../constants";
+import { CATEGORY_LABEL, JOB_LABEL } from "../locales/zh-cn";
 import type {
   Category,
+  Job,
   Recruitment,
   Slot,
   SlotRole,
@@ -17,6 +18,22 @@ const ROLE_EMOJI: Record<SlotRole, string> = {
   empty: "⬜️",
   none: "",
 };
+
+const MELEE_DPS: Job[] = [
+  "MNK",
+  "PGL",
+  "DRG",
+  "LNC",
+  "NIN",
+  "ROG",
+  "SAM",
+  "RPR",
+  "VPR",
+];
+
+const RANGED_PHYSICAL_DPS: Job[] = ["BRD", "ARC", "MCH", "DNC"];
+
+const RANGED_MAGICAL_DPS: Job[] = ["BLM", "THM", "SMN", "ACN", "RDM", "PCT"];
 
 function getColor(category: Category): number {
   switch (category) {
@@ -38,7 +55,20 @@ export function buildPartyField(slots: Slot[]) {
     slots
       .map((slot) => {
         if (slot.filled) {
-          return `${ROLE_EMOJI[slot.role[0] ?? "none"] || "✅️"}${truncate(slot.acceptedJobs[0] || "", 8)}`;
+          const filledJob = slot.acceptedJobs[0] as Job;
+          let roleEmoji = ROLE_EMOJI[slot.role[0] ?? "none"] || "✅️";
+          if (MELEE_DPS.includes(filledJob)) {
+            roleEmoji = "🥊";
+          } else if (RANGED_PHYSICAL_DPS.includes(filledJob)) {
+            roleEmoji = "🏹";
+          } else if (RANGED_MAGICAL_DPS.includes(filledJob)) {
+            roleEmoji = "🪄";
+          } else if (filledJob === "BSM") {
+            roleEmoji = "🦖";
+          } else if (filledJob === "BLM") {
+            roleEmoji = "🧙‍♂️";
+          }
+          return `${roleEmoji}${JOB_LABEL[filledJob] || filledJob}`;
         }
         return hideOptionalJobs || slot.acceptedJobs.length === 0
           ? "⬜️"

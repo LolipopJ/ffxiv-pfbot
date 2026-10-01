@@ -14,19 +14,6 @@ export interface Recruitment {
   rawText: string; // 用于正则匹配的拼接文本
 }
 
-export interface Slot {
-  filled: boolean;
-  role: SlotRole[]; // 可接受职业角色 (如 ["tank", "healer", "dps"])
-  acceptedJobs: string[]; // 空缺时列出可接受职业，如 ["PLD", "SMN", "RDM", "GNB"]；否则显示当前已填充的职业列表，如 ["PLD"]
-}
-
-export type SlotRole =
-  | "tank"
-  | "healer"
-  | "dps"
-  | "empty" // 任意职业，或团队小队占位符
-  | "none"; // 团队空白占位符
-
 export type Category =
   | "DutyRoulette"
   | "Dungeons"
@@ -44,3 +31,50 @@ export type Category =
   | "AdventuringForays"
   | "V&C Dungeon Finder"
   | "None";
+
+export interface Slot {
+  filled: boolean;
+  role: SlotRole[]; // 可接受职业角色 (如 ["tank", "healer", "dps"])
+  acceptedJobs: Job[]; // 空缺时列出可接受职业，如 ["PLD", "SMN", "RDM", "GNB"]；否则显示当前已填充的职业列表，如 ["PLD"]
+}
+
+export type SlotRole =
+  | "tank"
+  | "healer"
+  | "dps"
+  | "empty" // 任意职业，或团队小队占位符
+  | "none"; // 团队空白占位符
+
+export type Job =
+  | "PLD"
+  | "GLA"
+  | "WAR"
+  | "MRD"
+  | "DRK"
+  | "GNB"
+  | "WHM"
+  | "CNJ"
+  | "SCH"
+  | "AST"
+  | "SGE"
+  | "MNK"
+  | "PGL"
+  | "DRG"
+  | "LNC"
+  | "NIN"
+  | "ROG"
+  | "SAM"
+  | "RPR"
+  | "VPR"
+  | "BSM"
+  | "BRD"
+  | "ARC"
+  | "MCH"
+  | "DNC"
+  | "BLM"
+  | "THM"
+  | "SMN"
+  | "ACN"
+  | "RDM"
+  | "PCT"
+  | "BLU";

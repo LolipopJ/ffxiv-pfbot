@@ -17,7 +17,7 @@ import {
   isSubscriptionInteraction,
 } from "../src/commands/subscribe";
 import { execute as unsubscribeCommand } from "../src/commands/unsubscribe";
-import { CATEGORY_LABEL, DATA_CENTRE } from "../src/constants";
+import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../src/locales/zh-cn";
 import { closeStore, getStore } from "../src/services/store";
 import {
   buildSubscriptionPage,
@@ -166,8 +166,8 @@ test("subscribe offers optional multi-selects using all constant labels", () => 
     .map((row) => row.toJSON().components[0]);
   expect(centres).toMatchObject({
     min_values: 0,
-    max_values: Object.keys(DATA_CENTRE).length,
-    options: Object.entries(DATA_CENTRE).map(([value, label]) => ({
+    max_values: Object.keys(DATA_CENTRE_LABEL).length,
+    options: Object.entries(DATA_CENTRE_LABEL).map(([value, label]) => ({
       value,
       label,
     })),

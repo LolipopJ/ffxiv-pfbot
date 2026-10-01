@@ -11,7 +11,7 @@ import {
   StringSelectMenuBuilder,
 } from "discord.js";
 
-import { CATEGORY_LABEL, DATA_CENTRE } from "../constants";
+import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../locales/zh-cn";
 import {
   type ChannelScope,
   getKeywordError,
@@ -31,7 +31,7 @@ export const data = new SlashCommandBuilder()
     option
       .setName("keyword")
       .setDescription(
-        "匹配任务名和招募描述的 RE2 正则表达式，如 (?i)(?:バイト|報酬|傭兵|merc|[0-9０-９]+[\t　]*[万萬m])",
+        "匹配任务名和招募描述的 RE2 规范正则表达式，如 (?i)(?:バイト|報酬|傭兵|merc|(?:[^dｄhｈ0-9０-９]|^)[0-9０-９]+[\t　]*[万萬m])",
       )
       .setRequired(true)
       .setMinLength(1)
@@ -91,7 +91,7 @@ export function buildSubscriptionForm(
       select(
         "data-centres",
         "数据中心（可多选）",
-        DATA_CENTRE,
+        DATA_CENTRE_LABEL,
         filters.dataCentres,
       ),
       select(
@@ -165,7 +165,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
     if (selection.isStringSelectMenu()) {
       const isCentre = selection.customId === `${session}:data-centres`;
-      const labels = isCentre ? DATA_CENTRE : CATEGORY_LABEL;
+      const labels = isCentre ? DATA_CENTRE_LABEL : CATEGORY_LABEL;
       if (selection.values.some((value) => !Object.hasOwn(labels, value))) {
         await selection.reply({
           content: "❌ 无效的筛选条件，请重新选择。",
@@ -180,7 +180,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
     if (selection.customId === `${session}:cancel`) {
       await selection.update({
-        content: "ℹ️ 已取消，未创建订阅。",
+        content: "ℹ️ 已取消，未创建招募订阅。",
         components: [],
       });
       return;
@@ -207,13 +207,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         ...context.scope,
         subscriptionId: result.sub.id,
         userId: interaction.user.id,
+        keyword,
         dataCentres: result.sub.dataCentres,
         categories: result.sub.categories,
       });
     }
     await interaction.editReply({
       content: result.ok
-        ? `✅ 成功在当前频道创建招募订阅。\n正则: ${displayPattern(keyword, 1000)}\n${displaySubscriptionFilters(result.sub)}\nID: ${result.sub.id}`
+        ? `✅ 成功在当前频道创建招募订阅。\n匹配正则: ${displayPattern(keyword, 1000)}\n${displaySubscriptionFilters(result.sub)}\nID: ${result.sub.id}`
         : `❌ ${result.reason}`,
       components: [],
       allowedMentions: { parse: [] },
@@ -221,7 +222,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
   await interaction.editReply({
-    content: "ℹ️ 订阅设置已超时，未创建订阅。",
+    content: "ℹ️ 招募订阅设置已超时，未创建订阅。",
     components: [],
   });
 }
