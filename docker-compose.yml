@@ -1,0 +1,23 @@
+services:
+  pfbot:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 1m
+    environment:
+      DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN:?请在 .env 中设置 DISCORD_BOT_TOKEN}"
+      FETCH_CRON: "${FETCH_CRON:-*/5 * * * *}"
+      XIVPF_URL: "${XIVPF_URL:-https://xivpf.com/listings}"
+      TZ: "${TZ:-UTC}"
+      DATABASE_PATH: /app/data/pfbot.sqlite
+    volumes:
+      - pfbot-data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pfbot-data:

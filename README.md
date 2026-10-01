@@ -34,8 +34,9 @@
 
 ### 0. 环境要求
 
-- **Bun 1.4.2 或更新版本**：运行 TypeScript，并使用内置的 `bun:sqlite` 和定时任务。
-- **Git**：克隆项目及获取游戏数据子模块。
+- **直接使用 Bun 运行**：安装 Bun 1.4.2 或更新版本，运行 TypeScript，并使用内置的 `bun:sqlite` 和定时任务。
+- **Docker Compose 部署**：安装 Docker Engine 和 Docker Compose v2（命令为 `docker compose`），或安装带有 Compose 的 Docker Desktop 并使用 Linux 容器模式；宿主机无需安装 Bun。
+- **Git**：克隆项目；直接安装依赖或更新词典时，还需获取游戏数据子模块。
 - 部署环境能够访问 Discord 和 xivpf.com。
 
 ### 1. 创建并邀请 Discord 机器人
@@ -51,7 +52,9 @@
 
 管理订阅的用户需要拥有当前频道的**查看频道**和**管理频道**权限，操作按钮或菜单时也会重新检查权限。机器人本身无需管理员、管理频道或管理消息权限；仅启用 `Guilds` intent，无需开启 Message Content 或 Guild Members 特权 intent。
 
-### 2. 安装项目
+完成机器人的创建和邀请后，可选择下文的「直接使用 Bun 运行」或「Docker Compose 部署」，再按照「在 Discord 中管理订阅」配置推送。
+
+### 2.1 直接使用 Bun 运行
 
 如果尚未安装 Bun，可通过 npm 安装：
 
@@ -67,11 +70,13 @@ cd ffxiv-pfbot
 bun install
 ```
 
-安装时的 `prepare` 脚本会配置 Husky，并初始化、更新 `ffxiv-data` 游戏数据子模块，因此需要能够访问对应的 Git 仓库。项目已包含生成的翻译词典，日常启动无需重新构建。
+配置环境变量：
 
-### 3. 配置环境变量
+```bash
+cp .env.example .env
+```
 
-在项目根目录创建 `.env` 文件，填写必要的 `DISCORD_BOT_TOKEN`：
+编辑 `.env`，将 `DISCORD_BOT_TOKEN` 替换为真实的 Bot Token：
 
 ```env
 DISCORD_BOT_TOKEN="your-bot-token-here"
@@ -79,14 +84,15 @@ DISCORD_BOT_TOKEN="your-bot-token-here"
 
 全部环境变量如下表所示：
 
-| 环境变量            | 必填 | 默认值                       | 说明                                               |
-| ------------------- | ---- | ---------------------------- | -------------------------------------------------- |
-| `DISCORD_BOT_TOKEN` | 是   | -                            | Discord 机器人的 Bot Token。                       |
-| `FETCH_CRON`        | 否   | `*/5 * * * *`                | 招募检查的 Cron 表达式，使用运行环境的本地时区。   |
-| `DATABASE_PATH`     | 否   | `data/pfbot.sqlite`          | SQLite 数据库路径，父目录会自动创建。              |
-| `XIVPF_URL`         | 否   | `https://xivpf.com/listings` | 抓取地址；调试时可替换为具有相同 HTML 结构的页面。 |
+| 环境变量            | 必填 | 默认值                       | 说明                                                      |
+| ------------------- | ---- | ---------------------------- | --------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN` | 是   | -                            | Discord 机器人的 Bot Token。                              |
+| `FETCH_CRON`        | 否   | `*/5 * * * *`                | 招募检查的 Cron 表达式，使用运行环境的本地时区。          |
+| `DATABASE_PATH`     | 否   | `data/pfbot.sqlite`          | SQLite 数据库路径，父目录会自动创建。                     |
+| `XIVPF_URL`         | 否   | `https://xivpf.com/listings` | 抓取地址；调试时可替换为具有相同 HTML 结构的页面。        |
+| `TZ`                | 否   | 运行环境的时区               | Cron 使用的时区，如 `Asia/Shanghai`；Compose 默认 `UTC`。 |
 
-### 4. 启动机器人
+#### 启动机器人
 
 ```bash
 bun run start
@@ -94,7 +100,86 @@ bun run start
 
 机器人上线后，会为已加入的服务器自动注册斜杠命令，加入新服务器时也会自动注册。监控启动约 5 秒后执行首次检查，随后按 `FETCH_CRON` 周期运行；没有订阅、投递记录或待清理的过期标记时跳过抓取。
 
-### 5. 在 Discord 中管理订阅
+### 2.2. Docker Compose 部署
+
+```bash
+git clone https://github.com/LolipopJ/ffxiv-pfbot.git
+cd ffxiv-pfbot
+cp .env.example .env
+```
+
+编辑 `.env`，将 `DISCORD_BOT_TOKEN` 替换为真实的 Bot Token；其他可选配置见上文的环境变量表。
+
+#### 构建与启动
+
+在项目根目录执行：
+
+```bash
+# 检查配置，不输出包含 Token 的完整配置
+docker compose config --quiet
+
+# 构建镜像并在后台启动
+docker compose up -d --build
+
+# 查看容器状态与日志
+docker compose ps
+docker compose logs -f --tail=100 pfbot
+```
+
+#### 更新与日常维护
+
+```bash
+# 更新代码并重新构建、启动
+git pull --ff-only
+docker compose up -d --build
+
+# 修改 .env 后重新创建容器，使新配置生效
+docker compose up -d --force-recreate
+
+# 重启机器人
+docker compose restart pfbot
+
+# 停止并移除容器，保留数据库数据卷
+docker compose down
+```
+
+停止时默认留出 1 分钟，供机器人完成正在执行的监控任务并关闭数据库；订阅量较大时可调高 `docker-compose.yml` 中的 `stop_grace_period`。容器日志按每个文件 10 MiB、最多 3 个文件轮转。
+
+#### 数据持久化与备份
+
+订阅、投递记录和过期标记存储在 `pfbot-data` 命名数据卷中，容器内路径固定为 `/app/data/pfbot.sqlite`。Docker Compose 会覆盖 `.env` 中的 `DATABASE_PATH`；如需更改容器内数据库位置，必须同时修改 Compose 中的环境变量和卷挂载，保证数据库及其 WAL 文件仍在持久化目录内。
+
+备份时先停止机器人，再复制整个数据目录，避免运行中的 SQLite 数据库与 WAL 文件不一致：
+
+```bash
+docker compose stop pfbot
+mkdir -p backups
+docker compose cp pfbot:/app/data ./backups/pfbot-data
+docker compose start pfbot
+```
+
+每次备份请使用新的目标目录；备份必须在 `docker compose down` 移除容器之前完成，并建议另存到其他设备。
+
+恢复备份（或迁移直接运行时的 `data` 目录）时，先停止原实例，再执行以下命令；迁移时将 `./backups/pfbot-data/.` 替换为 `./data/.`：
+
+```bash
+# 构建镜像、创建容器和数据卷，但暂不启动机器人
+docker compose build
+docker compose create pfbot
+docker compose stop pfbot
+
+# 清空卷中的旧数据库文件，再复制完整备份
+docker compose run --rm --no-deps --user root pfbot rm -f /app/data/pfbot.sqlite /app/data/pfbot.sqlite-wal /app/data/pfbot.sqlite-shm
+docker compose cp ./backups/pfbot-data/. pfbot:/app/data
+
+# 修正复制后的文件权限，然后启动
+docker compose run --rm --no-deps --user root pfbot chown -R bun:bun /app/data
+docker compose up -d
+```
+
+恢复会替换现有数据库，请先备份原数据。备份目录应包含 `pfbot.sqlite`，以及备份时存在的 `pfbot.sqlite-wal`、`pfbot.sqlite-shm` 文件。
+
+### 3. 在 Discord 中管理订阅
 
 在需要接收推送的频道或线程中使用以下命令。创建、查看、编辑和取消订阅均限定在**当前服务器及当前频道**。
 
@@ -105,7 +190,15 @@ bun run start
 | `/edit page:1`        | 从分页菜单选择订阅，在预填表单中修改正则、数据中心和招募类别后提交保存。 |
 | `/unsubscribe page:1` | 从菜单中选择要取消的订阅，每页最多 25 个选项，可通过按钮翻页。           |
 
-`page` 可以省略，默认显示第 1 页，每页最多 25 个可编辑订阅。输入 `/subscribe` 命令打开弹窗表单，其中 `keyword` 为必填的 RE2 正则表达式，数据中心和招募类别支持多选，留空表示不按照数据中心和招募类别进行过滤。使用 `/edit` 命令可以编辑已有的招募订阅，新条件在下一轮检查中生效。
+`page` 可以省略，默认显示第 1 页，每页最多 25 个可编辑订阅。输入 `/subscribe` 命令打开弹窗表单，其中 `keyword` 为必填的满足 RE2 规范的正则表达式，数据中心和招募类别支持多选，留空表示不按照数据中心和招募类别进行过滤。使用 `/edit` 命令可以编辑已有的招募订阅，新条件在下一轮检查中生效。
+
+正则表达式长度为 **1–1000 字符**，匹配对象为**网站上英文副本名称与招募描述拼接后的文本**；推送卡片中的中文副本译名不参与匹配。
+
+| 正则示例                                                                              | 匹配效果                           |
+| ------------------------------------------------------------------------------------- | ---------------------------------- |
+| `(?i)(Ultimate\|Savage)`                                                              | 包含绝境战或零式副本，忽略大小写。 |
+| `(?i)(practice\|prog)`                                                                | 包含练习队或进度队，忽略大小写。   |
+| `(?i)(?:バイト\|報酬\|傭兵\|merc\|(?:[^dｄhｈ0-9０-９]\|^)[0-9０-９]+[\t　]*[万萬m])` | 包含佣兵招募信息，忽略大小写。     |
 
 管理回复仅对命令发起人可见，按钮、菜单和表单绑定发起用户、频道及会话，每个分页或设置会话在**两分钟**后失效。关闭弹窗或超时不会保存，只有提交完整表单后才会创建或修改订阅。提交时会重新检查用户及机器人权限；无效正则或与当前频道其他订阅重复的条件会被拒绝，原订阅保持不变。
 
@@ -117,20 +210,9 @@ bun run start
 4. 在招募类别菜单中选择「高难度任务」。
 5. 提交表单，等待下一轮检查推送符合条件的招募。
 
-又如，订阅佣兵招募信息，可以填写正则表达式 `(?i)(?:バイト|報酬|傭兵|merc|(?:[^dｄhｈ0-9０-９]|^)[0-9０-９]+[\t　]*[万萬m])`。
-
-#### 正则匹配说明
-
-正则长度为 **1–1000 字符**，使用 RE2JS 语法，默认区分大小写，可通过 `(?i)` 忽略大小写。匹配对象为**网站原始副本名称与招募描述拼接后的文本**；推送卡片中的中文副本译名不参与匹配。
-
-| 正则示例                 | 匹配效果                                       |
-| ------------------------ | ---------------------------------------------- |
-| `Ultimate`               | 包含 `Ultimate` 的副本名称或招募描述。         |
-| `(?i)(Ultimate\|Savage)` | 包含 Ultimate 或 Savage，忽略大小写。          |
-| `(?i)(practice\|prog)`   | 包含 practice 或 prog，忽略大小写。            |
-| `.*`                     | 匹配所有招募，仍受所选数据中心和招募类别限制。 |
-
 ## 项目开发
+
+省略拉取项目，安装依赖和部署环境变量的步骤，下面是项目的主要命令：
 
 ```bash
 # 启动机器人
@@ -180,19 +262,21 @@ ffxiv-pfbot/
 ├── scripts/build-dict.ts          # 翻译词典构建脚本
 ├── tests/                        # 自动化测试
 ├── ffxiv-data/                   # 游戏数据 Git 子模块
+├── Dockerfile                    # Bun 运行镜像
+├── docker-compose.yml            # 容器部署及 SQLite 数据卷
+├── .dockerignore                 # 构建上下文排除规则
+├── .env.example                  # 环境变量配置示例
 └── docs/preview.png              # 推送效果预览
 ```
 
 ### 更新翻译词典
 
-词典来自 `ffxiv-data` 子模块中的英文及简体中文 `ContentFinderCondition.csv`。更新游戏数据后，执行：
+词典来自 `ffxiv-data` 子模块中的游戏数据文件。上游数据更新后，执行如下命令生成最新的词典：
 
 ```bash
 git submodule update --init --remote --depth 1
 bun run build:dict
 ```
-
-构建脚本按行键关联英文和中文名称，生成 `src/constants/dict-zh-cn.ts` 并使用 Prettier 格式化。生成文件应通过脚本更新；未收录的副本名称会在推送中保留原文。
 
 ### 扩展与维护
 
