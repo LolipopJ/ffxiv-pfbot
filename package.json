@@ -8,11 +8,12 @@
   },
   "scripts": {
     "start": "bun run src/index.ts",
+    "build:dict": "bun run scripts/build-dict.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "prepare": "husky"
+    "prepare": "husky && git submodule update --init --remote --depth 1"
   },
   "lint-staged": {
     "*.{js,ts}": "eslint --cache --fix",

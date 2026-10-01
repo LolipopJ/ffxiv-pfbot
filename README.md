@@ -27,6 +27,12 @@ DATABASE_PATH="data/pfbot.sqlite"
 bun run start
 ```
 
+To build the translation dictionary:
+
+```bash
+bun run build:dict
+```
+
 To find lint errors:
 
 ```bash

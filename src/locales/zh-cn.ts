@@ -1,3 +1,4 @@
+import DICT from "../constants/dict-zh-cn";
 import type { Category, Job } from "../types/recruitment";
 
 export const DATA_CENTRE_LABEL = {
@@ -68,7 +69,9 @@ export const JOB_LABEL: Record<Job, string> = {
   BLU: "青魔法师",
 };
 
+export { DICT };
 export default {
+  DICT,
   DATA_CENTRE_LABEL,
   CATEGORY_LABEL,
   JOB_LABEL,

@@ -1,6 +1,6 @@
 import { EmbedBuilder, escapeMarkdown } from "discord.js";
 
-import { CATEGORY_LABEL, JOB_LABEL } from "../locales/zh-cn";
+import { CATEGORY_LABEL, DICT, JOB_LABEL } from "../locales/zh-cn";
 import type {
   Category,
   Job,
@@ -108,7 +108,9 @@ function escapedField(text: string) {
 export function buildListingEmbed(listing: Recruitment, now = Date.now()) {
   const embed = new EmbedBuilder()
     .setColor(getColor(listing.category))
-    .setTitle(field(listing.duty || "FF14 Party Finder", 256))
+    .setTitle(
+      field(DICT[listing.duty.toLowerCase()] || listing.duty || "Unknown", 256),
+    )
     .setFields([
       {
         name: "📃 招募描述",
@@ -120,7 +122,11 @@ export function buildListingEmbed(listing: Recruitment, now = Date.now()) {
         value: field(CATEGORY_LABEL[listing.category], 128),
         inline: true,
       },
-      { name: "🌍 服务器", value: field(listing.world, 128), inline: true },
+      {
+        name: "🌍 服务器",
+        value: field(`${listing.dataCentre} · ${listing.world}`, 128),
+        inline: true,
+      },
       { name: "👤 招募人", value: field(listing.creator, 256), inline: true },
       { name: "⚔️ 最低装等", value: field(listing.minIlvl, 32), inline: true },
       { name: "⏳ 招募期限", value: field(listing.expires, 128), inline: true },

@@ -1,0 +1,5 @@
+[submodule "ffxiv-data"]
+	path = ffxiv-data
+	url = https://github.com/Souma-Sumire/ffxiv-datamining-hexcode-mixed.git
+	branch = main
+	shallow = true

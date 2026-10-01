@@ -35,7 +35,7 @@ export function buildNotification(
 ) {
   const embed = buildListingEmbed(listing, observedAt).setFooter({
     text: field(
-      `${listing.dataCentre} | ${patterns.map((pattern) => displayPattern(pattern)).join("、")}`,
+      `${patterns.map((pattern) => displayPattern(pattern)).join(", ")}`,
       512,
     ),
   });
