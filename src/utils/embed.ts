@@ -72,7 +72,11 @@ export function buildPartyField(slots: Slot[]) {
         }
         return hideOptionalJobs || slot.acceptedJobs.length === 0
           ? "⬜️"
-          : `❓️${slot.acceptedJobs.join(", ")}`;
+          : `❓️${
+              slot.acceptedJobs.length > 6
+                ? slot.acceptedJobs.slice(0, 6).join(", ") + "..."
+                : slot.acceptedJobs.join(", ")
+            }`;
       })
       .join(" | ");
   const detailed = render(false);
