@@ -11,7 +11,7 @@ import {
   StringSelectMenuBuilder,
 } from "discord.js";
 
-import { CategoryLabel, DataCentre } from "../constants";
+import { CATEGORY_LABEL, DATA_CENTRE } from "../constants";
 import {
   type ChannelScope,
   getKeywordError,
@@ -20,17 +20,18 @@ import {
 } from "../services/store";
 import type { Category } from "../types/recruitment";
 import { getBotSendError, getCommandContext } from "../utils/channel";
+import { logger } from "../utils/logger";
 import { displaySubscriptionFilters } from "../utils/subscription";
 import { displayPattern } from "../utils/text";
 
 export const data = new SlashCommandBuilder()
   .setName("subscribe")
-  .setDescription("订阅当前频道的招募推送")
+  .setDescription("在当前频道订阅招募推送")
   .addStringOption((option) =>
     option
       .setName("keyword")
       .setDescription(
-        "匹配任务名和招募描述的 RE2 正则表达式，如 (?i)(?:バイト|報酬|傭兵|merc|[0-9０-９]+[万萬m])",
+        "匹配任务名和招募描述的 RE2 正则表达式，如 (?i)(?:バイト|報酬|傭兵|merc|[0-9０-９]+[\t　]*[万萬m])",
       )
       .setRequired(true)
       .setMinLength(1)
@@ -90,13 +91,13 @@ export function buildSubscriptionForm(
       select(
         "data-centres",
         "数据中心（可多选）",
-        DataCentre,
+        DATA_CENTRE,
         filters.dataCentres,
       ),
       select(
         "categories",
         "招募类别（可多选）",
-        CategoryLabel,
+        CATEGORY_LABEL,
         filters.categories,
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -164,7 +165,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
     if (selection.isStringSelectMenu()) {
       const isCentre = selection.customId === `${session}:data-centres`;
-      const labels = isCentre ? DataCentre : CategoryLabel;
+      const labels = isCentre ? DATA_CENTRE : CATEGORY_LABEL;
       if (selection.values.some((value) => !Object.hasOwn(labels, value))) {
         await selection.reply({
           content: "❌ 无效的筛选条件，请重新选择。",
@@ -201,9 +202,18 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       interaction.user.id,
       filters,
     );
+    if (result.ok) {
+      logger.info("订阅", "已创建招募订阅", {
+        ...context.scope,
+        subscriptionId: result.sub.id,
+        userId: interaction.user.id,
+        dataCentres: result.sub.dataCentres,
+        categories: result.sub.categories,
+      });
+    }
     await interaction.editReply({
       content: result.ok
-        ? `✅ 已订阅当前频道。\n正则: ${displayPattern(keyword, 1000)}\n${displaySubscriptionFilters(result.sub)}\nID: ${result.sub.id}`
+        ? `✅ 成功在当前频道创建招募订阅。\n正则: ${displayPattern(keyword, 1000)}\n${displaySubscriptionFilters(result.sub)}\nID: ${result.sub.id}`
         : `❌ ${result.reason}`,
       components: [],
       allowedMentions: { parse: [] },

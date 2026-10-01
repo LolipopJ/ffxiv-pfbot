@@ -68,9 +68,12 @@ export function fakeChannel(
 ) {
   const sends: { id: string; payload: unknown }[] = [];
   const edits: { id: string; payload: unknown }[] = [];
+  const deletes: string[] = [];
+  const messageCache = new Map<string, unknown>();
   const control = {
     sendError: undefined as Error | undefined,
     editError: undefined as (Error & { code?: number }) | undefined,
+    deleteError: undefined as (Error & { code?: number }) | undefined,
     permissions: allPermissions,
     archived: false,
     locked: false,
@@ -118,17 +121,24 @@ export function fakeChannel(
       if (control.sendError) throw control.sendError;
       const message = { id: `message-${sends.length + 1}`, payload };
       sends.push(message);
+      messageCache.set(message.id, message);
       return message;
     },
     messages: {
+      cache: messageCache,
+      delete: async (id: string) => {
+        if (control.deleteError) throw control.deleteError;
+        deletes.push(id);
+      },
       edit: async (id: string, payload: unknown) => {
         if (control.editError) throw control.editError;
         edits.push({ id, payload });
+        messageCache.set(id, { id, payload });
         return { id };
       },
     },
   } as unknown as GuildTextBasedChannel;
-  return { channel, control, sends, edits };
+  return { channel, control, sends, edits, deletes, messageCache };
 }
 
 export function fakeClient(channels: GuildTextBasedChannel[]): Client {

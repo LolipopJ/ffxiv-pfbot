@@ -1,11 +1,13 @@
 import { EmbedBuilder, escapeMarkdown } from "discord.js";
 
+import { CATEGORY_LABEL } from "../constants";
 import type {
   Category,
   Recruitment,
   Slot,
   SlotRole,
 } from "../types/recruitment";
+import { getListingExpiresAt, LISTING_LIFETIME_MS } from "./listing-time";
 import { truncate } from "./text";
 
 const ROLE_EMOJI: Record<SlotRole, string> = {
@@ -54,25 +56,11 @@ export function field(text: string, limit = 1024) {
 }
 
 export function getListingPublishedAt(expires: string, now = Date.now()) {
-  const match = /^in\s+(\d+|an?)\s+(seconds?|minutes?|hours?)$/i.exec(
-    expires.trim(),
-  );
-  if (!match)
-    return expires.trim().toLowerCase() === "now" ? now - 3_600_000 : null;
-  const amount = /^\d+$/.test(match[1]!) ? Number(match[1]) : 1;
-  const unit = match[2]!.toLowerCase();
-  const remaining =
-    amount *
-    (unit.startsWith("hour")
-      ? 3_600_000
-      : unit.startsWith("minute")
-        ? 60_000
-        : 1000);
-  if (!Number.isFinite(remaining) || remaining > 3_600_000) return null;
-  return now + remaining - 3_600_000;
+  const expiresAt = getListingExpiresAt(expires, now);
+  return expiresAt === null ? null : expiresAt - LISTING_LIFETIME_MS;
 }
 
-function descriptionField(text: string) {
+function escapedField(text: string) {
   const escaped = escapeMarkdown(text, {
     heading: true,
     bulletedList: true,
@@ -94,15 +82,20 @@ export function buildListingEmbed(listing: Recruitment, now = Date.now()) {
     .setFields([
       {
         name: "📃 招募描述",
-        value: descriptionField(listing.description),
+        value: escapedField(listing.description),
         inline: true,
       },
-      { name: "🫅 招募人", value: field(listing.creator, 256), inline: true },
+      {
+        name: "🎯 招募类型",
+        value: field(CATEGORY_LABEL[listing.category], 128),
+        inline: true,
+      },
       { name: "🌍 服务器", value: field(listing.world, 128), inline: true },
+      { name: "👤 招募人", value: field(listing.creator, 256), inline: true },
       { name: "⚔️ 最低装等", value: field(listing.minIlvl, 32), inline: true },
       { name: "⏳ 招募期限", value: field(listing.expires, 128), inline: true },
       {
-        name: `🎯 队伍状态 (${Number.isFinite(listing.current) ? listing.current : "?"}/${Number.isFinite(listing.total) ? listing.total : "?"})`,
+        name: `👨‍👩‍👧‍👦 队伍状态 (${Number.isFinite(listing.current) ? listing.current : "?"}/${Number.isFinite(listing.total) ? listing.total : "?"})`,
         value: buildPartyField(listing.slots),
         inline: false,
       },

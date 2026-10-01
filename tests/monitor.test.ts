@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import {
   ChannelType,
   type EmbedBuilder,
@@ -36,6 +36,561 @@ afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   for (const directory of directories.splice(0))
     removeTemporaryDirectory(directory);
+});
+
+beforeEach(() => {
+  spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  spyOn(console, "log").mockImplementation(() => {});
+  spyOn(console, "warn").mockImplementation(() => {});
+  spyOn(console, "error").mockImplementation(() => {});
+});
+
+test("expired suppression survives reopening the database after delivery cleanup", async () => {
+  const directory = temporaryDirectory();
+  directories.push(directory);
+  const filename = join(directory, "expired-suppression.sqlite");
+  const context = setup(filename);
+  let time = 1_800_000_000_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in a minute" }),
+  ]);
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  time += 60_000;
+  context.fetcher.mockImplementation(async () => [listing({ expires: "now" })]);
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(context.store.getMonitorDeliveries()).toEqual([]);
+  expect(context.store.getExpiredListingIds()).toEqual(["123"]);
+  expect(context.messageCache.size).toBe(0);
+  context.store.close();
+  const reopened = new SubscriptionStore(filename);
+  stores.push(reopened);
+  const restarted = createMonitor(
+    context.client,
+    reopened,
+    context.fetcher,
+    () => time,
+  );
+  await restarted.check();
+  expect(context.sends).toHaveLength(1);
+  expect(reopened.getMonitorDeliveries()).toEqual([]);
+  context.fetcher.mockImplementation(async () => {
+    throw new Error("offline");
+  });
+  await restarted.check();
+  expect(reopened.getExpiredListingIds()).toEqual(["123"]);
+  context.fetcher.mockImplementation(async () => []);
+  await restarted.check();
+  expect(reopened.getExpiredListingIds()).toEqual([]);
+  // After confirmed disappearance the ID can represent a newly observed recruitment.
+  context.fetcher.mockImplementation(async () => [listing()]);
+  await restarted.check();
+  expect(context.sends).toHaveLength(2);
+});
+
+test("expiry is saved before deletion and blocks a newly subscribed channel regardless of scope order", async () => {
+  const context = setup();
+  context.store.saveDelivery(scopeB, "123", {
+    messageId: "old-message",
+    payloadHash: "old-hash",
+    updatedAt: 1_799_999_940_000,
+    expiresAt: 1_800_000_000_000,
+  });
+  context.fetcher.mockImplementation(async () => [listing({ expires: "now" })]);
+  const b = fakeChannel(scopeB);
+  const deleteMessage = spyOn(b.channel.messages, "delete").mockImplementation(
+    async () => {
+      expect(context.store.getExpiredListingIds()).toEqual(["123"]);
+      throw new Error("offline");
+    },
+  );
+  const monitor = createMonitor(
+    fakeClient([context.channel, b.channel]),
+    context.store,
+    context.fetcher,
+    () => 1_800_000_000_000,
+  );
+  await monitor.check();
+  expect(context.sends).toHaveLength(0);
+  expect(deleteMessage).toHaveBeenCalledTimes(1);
+  expect(context.store.getDelivery(scopeB, "123")?.messageId).toBe(
+    "old-message",
+  );
+  const restarted = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => 1_800_000_000_000,
+  );
+  await restarted.check();
+  expect(context.sends).toHaveLength(0);
+});
+
+test("remaining expiry markers are pruned when there are no subscriptions or deliveries", async () => {
+  const context = setup();
+  for (const sub of context.store.getSubscriptions(scopeA))
+    context.store.removeSubscription(scopeA, sub.id);
+  context.store.markListingExpired("123", 1_800_000_000_000, 1_800_000_000_000);
+  context.fetcher.mockImplementation(async () => [listing({ expires: "now" })]);
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  expect(context.store.getExpiredListingIds()).toEqual(["123"]);
+  context.fetcher.mockImplementation(async () => {
+    throw new Error("offline");
+  });
+  await monitor.check();
+  expect(context.store.getExpiredListingIds()).toEqual(["123"]);
+  context.fetcher.mockImplementation(async () => []);
+  await monitor.check();
+  expect(context.store.getExpiredListingIds()).toEqual([]);
+  await monitor.check();
+  expect(context.fetcher).toHaveBeenCalledTimes(3);
+});
+
+test("repeated recruitment lifecycles do not accumulate delivery records, expiry markers or cached messages", async () => {
+  const context = setup();
+  let time = 1_800_000_000_000;
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  for (let cycle = 0; cycle < 100; cycle++) {
+    context.fetcher.mockImplementation(async () => [
+      listing({ id: `cycle-${cycle}`, expires: "in a second" }),
+    ]);
+    await monitor.check();
+    expect(context.messageCache.size).toBe(1);
+    time += 1000;
+    context.fetcher.mockImplementation(async () => [
+      listing({ id: `cycle-${cycle}`, expires: "now" }),
+    ]);
+    await monitor.check();
+    expect(context.store.getExpiredListingIds()).toEqual([`cycle-${cycle}`]);
+    expect(context.store.getMonitorDeliveries()).toHaveLength(0);
+    expect(context.messageCache.size).toBe(0);
+    context.fetcher.mockImplementation(async () => []);
+    await monitor.check();
+    expect(context.store.getExpiredListingIds()).toHaveLength(0);
+  }
+  expect(context.sends).toHaveLength(100);
+  expect(context.deletes).toHaveLength(100);
+});
+
+test("disappeared recruitments remove their Discord messages and only their delivery records", async () => {
+  const context = setup();
+  context.fetcher.mockImplementation(async () => [
+    listing(),
+    listing({ id: "still-active" }),
+  ]);
+  const b = fakeChannel(scopeB);
+  context.store.addSubscription(scopeB, "Ultimate", "user");
+  const monitor = createMonitor(
+    fakeClient([context.channel, b.channel]),
+    context.store,
+    context.fetcher,
+  );
+  await monitor.check();
+  context.fetcher.mockImplementation(async () => [
+    listing({ id: "still-active" }),
+  ]);
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(b.deletes).toEqual(["message-1"]);
+  expect(context.store.getDelivery(scopeA, "123")).toBeNull();
+  expect(context.store.getDelivery(scopeB, "123")).toBeNull();
+  expect(context.store.getMonitorDeliveries()).toHaveLength(2);
+  expect(context.store.getSubscriptions(scopeA)).toHaveLength(1);
+  expect(context.sends).toHaveLength(2);
+});
+
+test("cleanup continues after the final subscription is cancelled", async () => {
+  const context = setup();
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  for (const sub of context.store.getSubscriptions(scopeA))
+    context.store.removeSubscription(scopeA, sub.id);
+  await monitor.check();
+  expect(context.deletes).toHaveLength(0);
+  context.fetcher.mockImplementation(async () => []);
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(context.store.getMonitorDeliveries()).toEqual([]);
+});
+
+test("renewed expiry survives restart and fetch failures clean only at the new deadline", async () => {
+  const directory = temporaryDirectory();
+  directories.push(directory);
+  const filename = join(directory, "expiry.sqlite");
+  const context = setup(filename);
+  let time = 1_800_000_000_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in 16 seconds" }),
+  ]);
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  const createdAt = time;
+  expect(context.store.getDelivery(scopeA, "123")?.expiresAt).toBe(
+    time + 16_000,
+  );
+  time += 16_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in 14 minutes" }),
+  ]);
+  await monitor.check();
+  const updatedAt = time;
+  const expiresAt = time + 840_000;
+  expect(context.deletes).toEqual([]);
+  expect(context.store.getDelivery(scopeA, "123")).toMatchObject({
+    createdAt,
+    updatedAt,
+    expiresAt,
+  });
+  context.store.close();
+  const reopened = new SubscriptionStore(filename);
+  stores.push(reopened);
+  context.fetcher.mockImplementation(async () => {
+    throw new Error("HTTP 503");
+  });
+  time += 16_000;
+  const restarted = createMonitor(
+    context.client,
+    reopened,
+    context.fetcher,
+    () => time,
+  );
+  await restarted.check();
+  expect(context.deletes).toEqual([]);
+  expect(reopened.getDelivery(scopeA, "123")).toMatchObject({
+    createdAt,
+    updatedAt,
+    expiresAt,
+  });
+  time = expiresAt;
+  await restarted.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(reopened.getMonitorDeliveries()).toEqual([]);
+  expect(reopened.getSubscriptions(scopeA)).toHaveLength(1);
+});
+
+test("fetch failure preserves active messages and later empty snapshots clean them", async () => {
+  const context = setup();
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  context.fetcher.mockImplementation(async () => {
+    throw new Error("invalid page");
+  });
+  await monitor.check();
+  expect(context.deletes).toEqual([]);
+  expect(context.store.getDelivery(scopeA, "123")).not.toBeNull();
+  context.fetcher.mockImplementation(async () => []);
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+});
+
+test("failed deletions retain state and retry without updating or resending expired listings", async () => {
+  const context = setup();
+  let time = 1_800_000_000_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in a minute" }),
+  ]);
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  const previous = context.store.getDelivery(scopeA, "123")!;
+  time += 60_000;
+  context.fetcher.mockImplementation(async () => [listing({ expires: "now" })]);
+  context.control.deleteError = Object.assign(
+    new Error("Missing Permissions"),
+    { code: 50013 },
+  );
+  await monitor.check();
+  expect(context.store.getDelivery(scopeA, "123")).toEqual({
+    ...previous,
+    updatedAt: time,
+  });
+  context.control.deleteError = undefined;
+  await monitor.check();
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(context.store.getMonitorDeliveries()).toEqual([]);
+  expect(context.sends).toHaveLength(1);
+  expect(context.edits).toEqual([]);
+});
+
+test("an already deleted message is successful cleanup", async () => {
+  const context = setup();
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  context.control.deleteError = Object.assign(new Error("Unknown Message"), {
+    code: 10008,
+  });
+  context.fetcher.mockImplementation(async () => []);
+  await monitor.check();
+  expect(context.store.getMonitorDeliveries()).toEqual([]);
+  expect(context.messageCache.size).toBe(0);
+});
+
+test("cleanup runs without send or embed permissions", async () => {
+  const context = setup();
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  context.control.permissions = new PermissionsBitField(0n);
+  context.fetcher.mockImplementation(async () => []);
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(context.store.getMonitorDeliveries()).toEqual([]);
+});
+
+test("Discord-confirmed deleted channels clear state; inaccessible channels preserve it", async () => {
+  const context = setup();
+  await createMonitor(context.client, context.store, context.fetcher).check();
+  const fetchChannel = spyOn(context.client.channels, "fetch");
+  fetchChannel.mockRejectedValue(
+    Object.assign(new Error("Missing Access"), { code: 50001 }),
+  );
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  expect(context.store.getDelivery(scopeA, "123")).not.toBeNull();
+  fetchChannel.mockRejectedValue(
+    Object.assign(new Error("Unknown Channel"), { code: 10003 }),
+  );
+  await monitor.check();
+  expect(context.store.getMonitorDeliveries()).toEqual([]);
+  expect(context.store.getSubscriptions(scopeA)).toHaveLength(1);
+});
+
+test("a renewed deadline refreshes unchanged messages before checking the old expiry", async () => {
+  const context = setup();
+  let time = 1_800_000_000_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in a minute" }),
+  ]);
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  const createdAt = time;
+  time += 60_000;
+  await monitor.check();
+  expect(context.deletes).toEqual([]);
+  expect(context.sends).toHaveLength(1);
+  expect(context.edits).toEqual([]);
+  expect(context.store.getDelivery(scopeA, "123")).toMatchObject({
+    createdAt,
+    updatedAt: time,
+    expiresAt: time + 60_000,
+  });
+  expect(context.store.getExpiredListingIds()).toEqual([]);
+  time += 60_000;
+  context.fetcher.mockImplementation(async () => {
+    throw new Error("offline");
+  });
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+});
+
+test("unknown expiry retains its bounded deadline until a valid website renewal", async () => {
+  const context = setup();
+  let time = 1_800_000_000_000;
+  const createdAt = time;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "unknown" }),
+  ]);
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  time += 60_000;
+  await monitor.check();
+  expect(context.store.getDelivery(scopeA, "123")).toMatchObject({
+    createdAt,
+    updatedAt: time,
+    expiresAt: createdAt + 3_600_000,
+  });
+  time = createdAt + 3_600_000;
+  await monitor.check();
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(context.sends).toHaveLength(1);
+  expect(context.store.getExpiredListingIds()).toEqual(["123"]);
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in 10 minutes" }),
+  ]);
+  await monitor.check();
+  expect(context.sends).toHaveLength(2);
+  expect(context.store.getExpiredListingIds()).toEqual([]);
+  expect(context.store.getDelivery(scopeA, "123")).toMatchObject({
+    createdAt: time,
+    updatedAt: time,
+    expiresAt: time + 600_000,
+  });
+});
+
+test("the latest website countdown can shorten the deadline and survives a failed fetch", async () => {
+  const context = setup();
+  let time = 1_800_000_000_000;
+  const createdAt = time;
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  time += 60_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in 10 seconds" }),
+  ]);
+  await monitor.check();
+  expect(context.store.getDelivery(scopeA, "123")).toMatchObject({
+    createdAt,
+    updatedAt: time,
+    expiresAt: time + 10_000,
+  });
+  time += 10_000;
+  context.fetcher.mockImplementation(async () => {
+    throw new Error("offline");
+  });
+  await monitor.check();
+  expect(context.deletes).toEqual(["message-1"]);
+  expect(context.store.getDelivery(scopeA, "123")).toBeNull();
+});
+
+test("failed edits retain the successful payload while persisting renewed expiry", async () => {
+  const context = setup();
+  let time = 1_800_000_000_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in a minute" }),
+  ]);
+  const monitor = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  const previous = context.store.getDelivery(scopeA, "123")!;
+  time += 60_000;
+  context.fetcher.mockImplementation(async () => [
+    listing({ description: "Updated", expires: "in 10 minutes" }),
+  ]);
+  context.control.editError = new Error("offline");
+  await monitor.check();
+  expect(context.store.getDelivery(scopeA, "123")).toEqual({
+    ...previous,
+    updatedAt: time,
+    expiresAt: time + 600_000,
+  });
+  expect(context.deletes).toEqual([]);
+  expect(context.sends).toHaveLength(1);
+  context.control.editError = undefined;
+  await monitor.check();
+  expect(context.edits).toHaveLength(1);
+  expect(context.store.getDelivery(scopeA, "123")?.messageId).toBe(
+    previous.messageId,
+  );
+  expect(context.store.getDelivery(scopeA, "123")?.payloadHash).not.toBe(
+    previous.payloadHash,
+  );
+});
+
+test("renewals reach all channels even after cancellation or loss of access", async () => {
+  const context = setup();
+  const b = fakeChannel(scopeB);
+  context.store.addSubscription(scopeB, "Ultimate", "user");
+  let time = 1_800_000_000_000;
+  const createdAt = time;
+  const client = fakeClient([context.channel, b.channel]);
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "in a minute" }),
+  ]);
+  const monitor = createMonitor(
+    client,
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  for (const sub of context.store.getMonitorSubscriptions())
+    context.store.removeSubscription(sub, sub.id);
+  spyOn(client.channels, "fetch").mockResolvedValue(null);
+  time += 60_000;
+  await monitor.check();
+  for (const scope of [scopeA, scopeB]) {
+    expect(context.store.getDelivery(scope, "123")).toMatchObject({
+      createdAt,
+      updatedAt: time,
+      expiresAt: time + 60_000,
+    });
+  }
+  expect(context.store.getExpiredListingIds()).toEqual([]);
+  expect(context.deletes).toEqual([]);
+  expect(b.deletes).toEqual([]);
+});
+
+test("a renewed ID clears persisted expiry suppression before any channel is processed", async () => {
+  const context = setup();
+  const b = fakeChannel(scopeB);
+  context.store.addSubscription(scopeB, "Ultimate", "user");
+  let time = 1_800_000_000_000;
+  context.store.markListingExpired("123", time, time);
+  const monitor = createMonitor(
+    fakeClient([context.channel, b.channel]),
+    context.store,
+    context.fetcher,
+    () => time,
+  );
+  await monitor.check();
+  expect(context.store.getExpiredListingIds()).toEqual([]);
+  expect(context.sends).toHaveLength(1);
+  expect(b.sends).toHaveLength(1);
+  // No fields change, but a later observation must still be persisted.
+  time += 60_000;
+  await monitor.check();
+  expect(context.store.getDelivery(scopeA, "123")?.updatedAt).toBe(time);
+  expect(context.store.getDelivery(scopeB, "123")?.expiresAt).toBe(
+    time + 3_600_000,
+  );
+  expect(context.sends).toHaveLength(1);
+  expect(b.sends).toHaveLength(1);
+});
+
+test("already expired website listings are not sent and an idle monitor does not fetch", async () => {
+  const context = setup();
+  context.fetcher.mockImplementation(async () => [
+    listing({ expires: "now" }),
+    listing({ id: "zero", expires: "in 0 seconds" }),
+  ]);
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  expect(context.sends).toEqual([]);
+  for (const sub of context.store.getSubscriptions(scopeA))
+    context.store.removeSubscription(scopeA, sub.id);
+  await monitor.check();
+  expect(context.fetcher).toHaveBeenCalledTimes(1);
 });
 
 test("overlapping patterns and duplicate listing rows send one message", async () => {

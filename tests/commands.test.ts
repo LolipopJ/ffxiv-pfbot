@@ -17,7 +17,7 @@ import {
   isSubscriptionInteraction,
 } from "../src/commands/subscribe";
 import { execute as unsubscribeCommand } from "../src/commands/unsubscribe";
-import { CategoryLabel, DataCentre } from "../src/constants";
+import { CATEGORY_LABEL, DATA_CENTRE } from "../src/constants";
 import { closeStore, getStore } from "../src/services/store";
 import {
   buildSubscriptionPage,
@@ -152,7 +152,7 @@ test("commands have no target channel option and subscriptions are acknowledged 
   expect(fixture.deferred[0]?.flags).toBe(MessageFlags.Ephemeral);
   expect(getStore().getSubscriptions(scopeA)).toHaveLength(1);
   expect(getStore().getSubscriptions(scopeB)).toHaveLength(0);
-  expect(fixture.views.at(-1)?.content).toContain("已订阅当前频道");
+  expect(fixture.views.at(-1)?.content).toContain("成功在当前频道创建招募订阅");
   expect(getStore().getSubscriptions(scopeA)[0]).toMatchObject({
     dataCentres: [],
     categories: [],
@@ -166,16 +166,16 @@ test("subscribe offers optional multi-selects using all constant labels", () => 
     .map((row) => row.toJSON().components[0]);
   expect(centres).toMatchObject({
     min_values: 0,
-    max_values: Object.keys(DataCentre).length,
-    options: Object.entries(DataCentre).map(([value, label]) => ({
+    max_values: Object.keys(DATA_CENTRE).length,
+    options: Object.entries(DATA_CENTRE).map(([value, label]) => ({
       value,
       label,
     })),
   });
   expect(categories).toMatchObject({
     min_values: 0,
-    max_values: Object.keys(CategoryLabel).length,
-    options: Object.entries(CategoryLabel).map(([value, label]) => ({
+    max_values: Object.keys(CATEGORY_LABEL).length,
+    options: Object.entries(CATEGORY_LABEL).map(([value, label]) => ({
       value,
       label,
     })),

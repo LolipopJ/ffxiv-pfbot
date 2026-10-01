@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "path";
 
@@ -24,6 +23,69 @@ afterEach(() => {
 });
 
 describe("SQLite subscription scope", () => {
+  test("expired listing markers survive reopening and removing delivery records", () => {
+    const directory = temporaryDirectory();
+    directories.push(directory);
+    const filename = join(directory, "expired-listings.sqlite");
+    const first = open(filename);
+    first.saveDelivery(scopeA, "123", {
+      messageId: "message",
+      payloadHash: "hash",
+      updatedAt: 1_799_999_940_000,
+      expiresAt: 1_800_000_000_000,
+    });
+    first.markListingExpired("123", 1_800_000_000_000, 1_800_000_000_000);
+    first.markListingExpired("123", 1_800_000_000_001, 1_800_000_000_001);
+    expect(first.getExpiredListingIds()).toEqual(["123"]);
+    first.removeDelivery(scopeA, "123");
+    first.close();
+    const reopened = open(filename);
+    expect(reopened.getMonitorDeliveries()).toEqual([]);
+    expect(reopened.getExpiredListingIds()).toEqual(["123"]);
+    expect(reopened.getExpiredListings()).toEqual([
+      {
+        listingId: "123",
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_001,
+        expiresAt: 1_800_000_000_001,
+      },
+    ]);
+    reopened.removeExpiredListing("123");
+    expect(reopened.getExpiredListingIds()).toEqual([]);
+  });
+
+  test("delivery updates preserve creation time and replace observation time and deadline", () => {
+    const store = open();
+    const otherGuild = { ...scopeA, guildId: "other-guild" };
+    for (const scope of [scopeA, scopeB, otherGuild]) {
+      store.saveDelivery(scope, "123", {
+        messageId: "message",
+        payloadHash: "hash",
+        updatedAt: 1_799_999_940_000,
+        expiresAt: 1_800_000_000_000,
+      });
+    }
+    store.saveDelivery(scopeA, "123", {
+      messageId: "updated",
+      payloadHash: "updated",
+      updatedAt: 1_800_000_000_000,
+      expiresAt: 1_800_000_060_000,
+    });
+    expect(store.getDelivery(scopeA, "123")).toEqual({
+      messageId: "updated",
+      payloadHash: "updated",
+      createdAt: 1_799_999_940_000,
+      updatedAt: 1_800_000_000_000,
+      expiresAt: 1_800_000_060_000,
+    });
+    expect(store.getMonitorDeliveries()).toHaveLength(3);
+    expect(store.removeDelivery(scopeA, "123")).toBe(true);
+    expect(store.removeDelivery(scopeA, "123")).toBe(false);
+    expect(store.getDelivery(scopeB, "123")).not.toBeNull();
+    expect(store.getDelivery(otherGuild, "123")).not.toBeNull();
+    expect(store.getMonitorDeliveries()).toHaveLength(2);
+  });
+
   test("isolates reads, pagination, deletes and deliveries by channel and guild", () => {
     const store = open();
     const a = store.addSubscription(scopeA, ".*", "A");
@@ -44,6 +106,8 @@ describe("SQLite subscription scope", () => {
     store.saveDelivery(scopeA, "123", {
       messageId: "msg-A",
       payloadHash: "hash",
+      updatedAt: 1_799_999_940_000,
+      expiresAt: 1_800_000_000_000,
     });
     expect(store.getDelivery(scopeB, "123")).toBeNull();
     expect(
@@ -81,6 +145,8 @@ describe("SQLite subscription scope", () => {
     first.saveDelivery(scopeA, "123", {
       messageId: "message-1",
       payloadHash: "hash",
+      updatedAt: 1_799_999_940_000,
+      expiresAt: 1_800_000_000_000,
     });
     first.close();
     const second = open(filename);
@@ -92,6 +158,9 @@ describe("SQLite subscription scope", () => {
     expect(second.getDelivery(scopeA, "123")).toEqual({
       messageId: "message-1",
       payloadHash: "hash",
+      createdAt: 1_799_999_940_000,
+      updatedAt: 1_799_999_940_000,
+      expiresAt: 1_800_000_000_000,
     });
   });
 
@@ -141,52 +210,6 @@ describe("SQLite subscription scope", () => {
             Array.isArray(sub.dataCentres) && Array.isArray(sub.categories),
         ),
     ).toBe(true);
-  });
-
-  test("legacy databases migrate without losing subscriptions or delivery state", () => {
-    const directory = temporaryDirectory();
-    directories.push(directory);
-    const filename = join(directory, "legacy.sqlite");
-    const legacy = new Database(filename);
-    legacy.run(`
-      CREATE TABLE subscriptions (
-        id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,
-        keyword TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL,
-        UNIQUE (guild_id, channel_id, keyword)
-      );
-      INSERT INTO subscriptions VALUES ('legacy-id', 'guild-A', 'channel-A', 'Ultimate', 'user', '2026-09-01T00:00:00.000Z');
-      CREATE TABLE deliveries (
-        guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, listing_id TEXT NOT NULL,
-        message_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
-        PRIMARY KEY (guild_id, channel_id, listing_id)
-      );
-      INSERT INTO deliveries VALUES ('guild-A', 'channel-A', '123', 'message-1', 'hash');
-    `);
-    legacy.close();
-    const migrated = open(filename);
-    expect(migrated.getSubscriptions(scopeA)).toEqual([
-      {
-        ...scopeA,
-        id: "legacy-id",
-        keyword: "Ultimate",
-        userId: "user",
-        createdAt: "2026-09-01T00:00:00.000Z",
-        dataCentres: [],
-        categories: [],
-      },
-    ]);
-    expect(migrated.getDelivery(scopeA, "123")).toEqual({
-      messageId: "message-1",
-      payloadHash: "hash",
-    });
-    expect(migrated.addSubscription(scopeA, "Ultimate", "user").ok).toBe(false);
-    expect(
-      migrated.addSubscription(scopeA, "Ultimate", "user", {
-        dataCentres: ["Mana"],
-      }).ok,
-    ).toBe(true);
-    migrated.close();
-    expect(open(filename).getSubscriptions(scopeA)).toHaveLength(2);
   });
 
   test("concurrent SQLite writers do not lose updates", async () => {

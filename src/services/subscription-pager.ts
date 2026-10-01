@@ -10,6 +10,7 @@ import {
 } from "discord.js";
 
 import { getCommandContext } from "../utils/channel";
+import { logger } from "../utils/logger";
 import { displaySubscriptionFilters } from "../utils/subscription";
 import { displayPattern, truncate } from "../utils/text";
 import { type ChannelScope, getStore, SubscriptionStore } from "./store";
@@ -49,8 +50,8 @@ export function buildSubscriptionPage(
   >[] = [];
   let content =
     result.total === 0
-      ? "ℹ️ 当前频道没有任何订阅。"
-      : `📋 **当前频道订阅**（${result.total} 个）｜第 ${result.page + 1}/${result.pageCount} 页`;
+      ? "ℹ️ 当前频道没有任何招募订阅。"
+      : `📋 **当前频道招募订阅**（${result.total} 个）｜第 ${result.page + 1}/${result.pageCount} 页`;
   if (mode === "list") {
     content += result.subscriptions
       .map(
@@ -59,10 +60,10 @@ export function buildSubscriptionPage(
       )
       .join("");
   } else if (result.total > 0) {
-    content += "\n选择要取消的订阅：";
+    content += "\n选择要取消的招募订阅：";
     const select = new StringSelectMenuBuilder()
       .setCustomId(`${session}:delete`)
-      .setPlaceholder("选择本页订阅")
+      .setPlaceholder("选择本页招募订阅")
       .addOptions(
         result.subscriptions.map((sub) => ({
           label: truncate(sub.keyword.replace(/\s+/g, " "), 90) || "（空正则）",
@@ -143,14 +144,23 @@ export async function runSubscriptionPager(
       const id = selection.values[0];
       if (!id || !view.subscriptions.some((sub) => sub.id === id)) {
         await selection.reply({
-          content: "未找到该订阅或无权操作。",
+          content: "❌️ 未找到该招募订阅或无权操作。",
           flags: MessageFlags.Ephemeral,
         });
         continue;
       }
       const removed = store.removeSubscription(context.scope, id);
+      if (removed) {
+        logger.info("订阅", "已取消招募订阅", {
+          ...context.scope,
+          subscriptionId: id,
+          userId: interaction.user.id,
+        });
+      }
       await selection.update({
-        content: removed ? "✅ 已取消订阅。" : "未找到该订阅或无权操作。",
+        content: removed
+          ? "✅ 已取消该招募订阅。"
+          : "❌️ 未找到该招募订阅或无权操作。",
         components: [],
       });
       return;

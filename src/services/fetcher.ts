@@ -7,6 +7,7 @@ import type {
   Slot,
   SlotRole,
 } from "../types/recruitment";
+import { logger } from "../utils/logger";
 
 const XIVPF_URL = process.env.XIVPF_URL || "https://xivpf.com/listings";
 export const MAX_HTML_BYTES = 16 * 1024 * 1024;
@@ -19,6 +20,7 @@ export async function getListings({
   timeoutMs?: number;
 } = {}): Promise<Recruitment[]> {
   const controller = new AbortController();
+  const startedAt = Date.now();
   const fetchTimeout = setTimeout(() => controller.abort(), timeoutMs);
   let reader:
     | Pick<
@@ -60,9 +62,11 @@ export async function getListings({
     }
     chunks.push(decoder.decode());
     const listings = parseListings(chunks.join(""));
-    console.log(
-      `📄 成功解析 ${listings.length} 条招募 (HTML size: ${(bytes / 1024).toFixed(1)}KB)`,
-    );
+    logger.info("抓取", "招募页面抓取和解析完成", {
+      listings: listings.length,
+      htmlKiB: Number((bytes / 1024).toFixed(1)),
+      durationMs: Date.now() - startedAt,
+    });
     return listings;
   } finally {
     clearTimeout(fetchTimeout);

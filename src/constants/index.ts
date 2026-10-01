@@ -1,6 +1,6 @@
 import type { Category } from "../types/recruitment";
 
-export const DataCentre = {
+export const DATA_CENTRE = {
   Aether: "Aether (NA)",
   Crystal: "Crystal (NA)",
   Dynamis: "Dynamis (NA)",
@@ -14,7 +14,7 @@ export const DataCentre = {
   Materia: "Materia (OC)",
 };
 
-export const CategoryLabel: Record<Category, string> = {
+export const CATEGORY_LABEL: Record<Category, string> = {
   DutyRoulette: "随机任务",
   Dungeons: "迷宫挑战",
   Guildhests: "行会令",

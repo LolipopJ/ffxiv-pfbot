@@ -4,8 +4,9 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { RE2JS } from "re2js";
 
-import { CategoryLabel, DataCentre } from "../constants";
+import { CATEGORY_LABEL, DATA_CENTRE } from "../constants";
 import type { Category } from "../types/recruitment";
+import { logger } from "../utils/logger";
 
 export interface ChannelScope {
   guildId: string;
@@ -37,6 +38,20 @@ interface SubscriptionRow extends Omit<
 export interface Delivery {
   messageId: string;
   payloadHash: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface MonitorDelivery extends ChannelScope, Delivery {
+  listingId: string;
+}
+
+export interface ExpiredListing {
+  listingId: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
 }
 
 const SUBSCRIPTION_COLUMNS = `id, guild_id AS guildId, channel_id AS channelId,
@@ -95,7 +110,17 @@ export class SubscriptionStore {
         listing_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
         payload_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
         PRIMARY KEY (guild_id, channel_id, listing_id)
+      );
+      CREATE INDEX IF NOT EXISTS deliveries_listing_id ON deliveries (listing_id);
+      CREATE TABLE IF NOT EXISTS expired_listings (
+        listing_id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
@@ -112,9 +137,9 @@ export class SubscriptionStore {
     if (keywordError) return { ok: false as const, reason: keywordError };
     const dataCentres = [...new Set(filters.dataCentres ?? [])].sort();
     const categories = [...new Set(filters.categories ?? [])].sort();
-    if (dataCentres.some((value) => !Object.hasOwn(DataCentre, value)))
+    if (dataCentres.some((value) => !Object.hasOwn(DATA_CENTRE, value)))
       return { ok: false as const, reason: "无效的数据中心" };
-    if (categories.some((value) => !Object.hasOwn(CategoryLabel, value)))
+    if (categories.some((value) => !Object.hasOwn(CATEGORY_LABEL, value)))
       return { ok: false as const, reason: "无效的招募类别" };
     const sub: Subscription = {
       ...scope,
@@ -146,7 +171,10 @@ export class SubscriptionStore {
       );
     return result.changes
       ? { ok: true as const, sub }
-      : { ok: false as const, reason: "该频道已有相同正则和筛选条件的订阅" };
+      : {
+          ok: false as const,
+          reason: "该频道已有相同正则和筛选条件的招募订阅",
+        };
   }
 
   getSubscriptions(scope: ChannelScope): Subscription[] {
@@ -225,22 +253,103 @@ export class SubscriptionStore {
     return this.db
       .query<Delivery, [string, string, string]>(
         `
-      SELECT message_id AS messageId, payload_hash AS payloadHash FROM deliveries
+      SELECT message_id AS messageId, payload_hash AS payloadHash,
+        created_at AS createdAt, updated_at AS updatedAt,
+        expires_at AS expiresAt FROM deliveries
       WHERE guild_id = ? AND channel_id = ? AND listing_id = ?
     `,
       )
       .get(scope.guildId, scope.channelId, listingId);
   }
 
-  saveDelivery(scope: ChannelScope, listingId: string, delivery: Delivery) {
+  // Only the trusted background monitor may enumerate delivery records across channels.
+  getMonitorDeliveries(): MonitorDelivery[] {
+    return this.db
+      .query<MonitorDelivery, []>(
+        `
+        SELECT guild_id AS guildId, channel_id AS channelId, listing_id AS listingId,
+          message_id AS messageId, payload_hash AS payloadHash,
+          created_at AS createdAt, updated_at AS updatedAt, expires_at AS expiresAt
+        FROM deliveries ORDER BY guild_id, channel_id, listing_id
+      `,
+      )
+      .all();
+  }
+
+  getExpiredListings(): ExpiredListing[] {
+    return this.db
+      .query<ExpiredListing, []>(
+        `SELECT listing_id AS listingId, created_at AS createdAt,
+          updated_at AS updatedAt, expires_at AS expiresAt
+        FROM expired_listings ORDER BY listing_id`,
+      )
+      .all();
+  }
+
+  getExpiredListingIds(): string[] {
+    return this.getExpiredListings().map((listing) => listing.listingId);
+  }
+
+  markListingExpired(listingId: string, expiresAt: number, updatedAt: number) {
+    this.db
+      .query(
+        `
+        INSERT INTO expired_listings (listing_id, created_at, updated_at, expires_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (listing_id) DO UPDATE SET
+          updated_at = excluded.updated_at, expires_at = excluded.expires_at
+      `,
+      )
+      .run(listingId, updatedAt, updatedAt, expiresAt);
+  }
+
+  removeExpiredListing(listingId: string) {
+    this.db
+      .query("DELETE FROM expired_listings WHERE listing_id = ?")
+      .run(listingId);
+  }
+
+  removeDelivery(scope: ChannelScope, listingId: string) {
+    validateScope(scope);
+    return (
+      this.db
+        .query(
+          `DELETE FROM deliveries WHERE guild_id = ? AND channel_id = ? AND listing_id = ?`,
+        )
+        .run(scope.guildId, scope.channelId, listingId).changes > 0
+    );
+  }
+
+  // Website observations update every channel, independently of Discord operations.
+  refreshMonitorDeliveries(
+    listingExpiries: ReadonlyMap<string, number | null>,
+    updatedAt: number,
+  ) {
+    const update = this.db.query(
+      `UPDATE deliveries SET updated_at = ?, expires_at = COALESCE(?, expires_at)
+        WHERE listing_id = ?`,
+    );
+    this.db.transaction(() => {
+      for (const [listingId, expiresAt] of listingExpiries)
+        update.run(updatedAt, expiresAt, listingId);
+    })();
+  }
+
+  saveDelivery(
+    scope: ChannelScope,
+    listingId: string,
+    delivery: Omit<Delivery, "createdAt">,
+  ) {
     validateScope(scope);
     this.db
       .query(
         `
-      INSERT INTO deliveries (guild_id, channel_id, listing_id, message_id, payload_hash)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO deliveries
+        (guild_id, channel_id, listing_id, message_id, payload_hash, created_at, updated_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (guild_id, channel_id, listing_id) DO UPDATE SET
-        message_id = excluded.message_id, payload_hash = excluded.payload_hash
+        message_id = excluded.message_id, payload_hash = excluded.payload_hash,
+        updated_at = excluded.updated_at, expires_at = excluded.expires_at
     `,
       )
       .run(
@@ -249,6 +358,9 @@ export class SubscriptionStore {
         listingId,
         delivery.messageId,
         delivery.payloadHash,
+        delivery.updatedAt,
+        delivery.updatedAt,
+        delivery.expiresAt,
       );
   }
 
@@ -260,13 +372,19 @@ export class SubscriptionStore {
 let store: SubscriptionStore | undefined;
 
 export function getStore() {
-  return (store ??= new SubscriptionStore(
-    process.env.DATABASE_PATH ||
-      join(import.meta.dir, "../../data/pfbot.sqlite"),
-  ));
+  if (!store) {
+    const filename =
+      process.env.DATABASE_PATH ||
+      join(import.meta.dir, "../../data/pfbot.sqlite");
+    store = new SubscriptionStore(filename);
+    logger.info("数据库", "订阅数据库已打开", { filename });
+  }
+  return store;
 }
 
 export function closeStore() {
+  if (!store) return;
   store?.close();
   store = undefined;
+  logger.info("数据库", "订阅数据库已关闭");
 }
