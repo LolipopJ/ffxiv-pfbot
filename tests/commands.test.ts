@@ -2,23 +2,30 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   ChannelType,
   type ChatInputCommandInteraction,
+  ComponentType,
   type MessageComponentInteraction,
   MessageFlags,
+  type ModalBuilder,
+  type ModalSubmitInteraction,
   PermissionFlagsBits,
   PermissionsBitField,
+  TextInputStyle,
 } from "discord.js";
 import { join } from "path";
 
+import { data as editData, execute as editCommand } from "../src/commands/edit";
 import { data as listData, execute as listCommand } from "../src/commands/list";
 import {
-  buildSubscriptionForm,
   data as subscribeData,
   execute as subscribeCommand,
-  isSubscriptionInteraction,
 } from "../src/commands/subscribe";
 import { execute as unsubscribeCommand } from "../src/commands/unsubscribe";
 import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../src/locales/zh-cn";
 import { closeStore, getStore } from "../src/services/store";
+import {
+  buildSubscriptionForm,
+  isSubscriptionInteraction,
+} from "../src/services/subscription-form";
 import {
   buildSubscriptionPage,
   isPagerInteraction,
@@ -51,16 +58,15 @@ afterEach(() => {
 });
 
 interface Action {
-  kind:
-    | "next"
-    | "previous"
-    | "delete"
-    | "data-centres"
-    | "categories"
-    | "confirm"
-    | "cancel";
+  kind: "next" | "previous" | "delete" | "edit";
   id?: string;
-  values?: string[];
+  before?: () => void;
+  permissions?: PermissionsBitField;
+}
+interface Submission {
+  keyword?: string;
+  dataCentres?: string[];
+  categories?: string[];
   before?: () => void;
   permissions?: PermissionsBitField;
 }
@@ -71,14 +77,20 @@ interface View {
 }
 
 function interactionFixture(
-  options: { keyword?: string; page?: number; actions?: Action[] } = {},
+  options: {
+    page?: number;
+    actions?: Action[];
+    submission?: Submission | null;
+  } = {},
 ) {
   const channel = fakeChannel();
   const views: View[] = [];
   const deferred: { flags?: number }[] = [];
   const componentReplies: View[] = [];
+  const modals: ModalBuilder[] = [];
   const actions = [...(options.actions ?? [])];
   let current: View;
+  let acknowledged = false;
   const base = {
     guildId: scopeA.guildId,
     channelId: scopeA.channelId,
@@ -86,6 +98,68 @@ function interactionFixture(
     memberPermissions: allPermissions,
     inGuild: () => true,
     user: { id: "user" },
+  };
+  const modalMethods = {
+    showModal: async (form: ModalBuilder) => {
+      modals.push(form);
+    },
+    awaitModalSubmit: async ({
+      filter,
+    }: {
+      filter: (i: ModalSubmitInteraction) => boolean;
+    }) => {
+      await Promise.resolve();
+      if (options.submission === null) throw new Error("simulated timeout");
+      const submission = options.submission ?? {};
+      submission.before?.();
+      const form = modals.at(-1)!.toJSON();
+      const fields = form.components.map((label) => {
+        if (label.type !== ComponentType.Label)
+          throw new Error("expected modal labels");
+        return label.component;
+      });
+      const keyword = fields.find(
+        (field) => field.type === ComponentType.TextInput,
+      );
+      const defaults = (customId: string) => {
+        const select = fields.find(
+          (field) =>
+            field.type === ComponentType.StringSelect &&
+            field.custom_id === customId,
+        );
+        if (select?.type !== ComponentType.StringSelect)
+          throw new Error("missing select");
+        return select.options
+          .filter((option) => option.default)
+          .map((option) => option.value);
+      };
+      const submitted = {
+        ...base,
+        customId: form.custom_id,
+        memberPermissions: submission.permissions ?? allPermissions,
+        fields: {
+          getTextInputValue: () =>
+            submission.keyword ?? keyword?.value ?? "Ultimate",
+          getStringSelectValues: (customId: string) =>
+            customId === "data-centres"
+              ? (submission.dataCentres ?? defaults(customId))
+              : (submission.categories ?? defaults(customId)),
+        },
+        deferReply: async (payload: { flags?: number }) => {
+          deferred.push(payload);
+        },
+        editReply: async (payload: View) => {
+          views.push(payload);
+          return message;
+        },
+      } as unknown as ModalSubmitInteraction;
+      if (!filter(submitted)) throw new Error("rejected fixture modal");
+      return submitted;
+    },
+    followUp: async (payload: View) => {
+      views.push(payload);
+      return message;
+    },
   };
   const message = {
     awaitMessageComponent: async ({
@@ -101,23 +175,33 @@ function interactionFixture(
       };
       const customId = row.toJSON().components[0]!.custom_id;
       const session = customId.slice(0, customId.lastIndexOf(":"));
+      let componentAcknowledged = false;
       const selection = {
         ...base,
+        ...modalMethods,
         memberPermissions: action.permissions ?? allPermissions,
         customId: `${session}:${action.kind}`,
-        values: action.values ?? [action.id ?? ""],
-        isButton: () =>
-          !["delete", "data-centres", "categories"].includes(action.kind),
-        isStringSelectMenu: () =>
-          ["delete", "data-centres", "categories"].includes(action.kind),
+        values: [action.id ?? ""],
+        isButton: () => !["delete", "edit"].includes(action.kind),
+        isStringSelectMenu: () => ["delete", "edit"].includes(action.kind),
+        showModal: async (form: ModalBuilder) => {
+          if (componentAcknowledged)
+            throw new Error("component was already acknowledged");
+          componentAcknowledged = true;
+          await modalMethods.showModal(form);
+        },
         update: async (payload: View) => {
+          componentAcknowledged = true;
           views.push(payload);
           current = payload;
         },
         reply: async (payload: View) => {
+          componentAcknowledged = true;
           componentReplies.push(payload);
         },
-        deferUpdate: async () => {},
+        deferUpdate: async () => {
+          componentAcknowledged = true;
+        },
       } as unknown as MessageComponentInteraction;
       if (!filter(selection)) throw new Error("rejected fixture interaction");
       return selection;
@@ -125,11 +209,19 @@ function interactionFixture(
   };
   const interaction = {
     ...base,
-    options: {
-      getString: () => options.keyword ?? "Ultimate",
-      getInteger: () => options.page ?? null,
+    ...modalMethods,
+    options: { getInteger: () => options.page ?? null },
+    showModal: async (form: ModalBuilder) => {
+      if (acknowledged) throw new Error("command was already acknowledged");
+      acknowledged = true;
+      await modalMethods.showModal(form);
+    },
+    reply: async (payload: View) => {
+      acknowledged = true;
+      views.push(payload);
     },
     deferReply: async (payload: { flags?: number }) => {
+      acknowledged = true;
       deferred.push(payload);
     },
     editReply: async (payload: View) => {
@@ -138,33 +230,42 @@ function interactionFixture(
       return message;
     },
   } as unknown as ChatInputCommandInteraction;
-  return { interaction, views, deferred, componentReplies, ...channel };
+  return { interaction, views, deferred, componentReplies, modals, ...channel };
 }
 
-test("commands have no target channel option and subscriptions are acknowledged privately", async () => {
-  for (const command of [listData, subscribeData]) {
+function formFields(form: ModalBuilder) {
+  return form.toJSON().components.map((label) => {
+    if (label.type !== ComponentType.Label)
+      throw new Error("expected modal labels");
+    return label.component;
+  });
+}
+
+test("commands collect keyword in the form and have no target channel option", () => {
+  for (const command of [editData, listData, subscribeData]) {
     expect(
-      command.toJSON().options?.some((option) => option.name === "channel"),
+      command
+        .toJSON()
+        .options?.some((option) =>
+          ["channel", "keyword"].includes(option.name),
+        ) ?? false,
     ).toBe(false);
   }
-  const fixture = interactionFixture({ actions: [{ kind: "confirm" }] });
-  await subscribeCommand(fixture.interaction);
-  expect(fixture.deferred[0]?.flags).toBe(MessageFlags.Ephemeral);
-  expect(getStore().getSubscriptions(scopeA)).toHaveLength(1);
-  expect(getStore().getSubscriptions(scopeB)).toHaveLength(0);
-  expect(fixture.views.at(-1)?.content).toContain("成功在当前频道创建招募订阅");
-  expect(getStore().getSubscriptions(scopeA)[0]).toMatchObject({
-    dataCentres: [],
-    categories: [],
-  });
 });
 
-test("subscribe offers optional multi-selects using all constant labels", () => {
-  const form = buildSubscriptionForm("session", "Ultimate", {});
-  const [centres, categories] = form.components
-    .slice(0, 2)
-    .map((row) => row.toJSON().components[0]);
+test("one modal contains keyword and optional multi-selects for both create and edit", () => {
+  const form = buildSubscriptionForm("session");
+  const [keyword, centres, categories] = formFields(form);
+  expect(keyword).toMatchObject({
+    custom_id: "keyword",
+    style: TextInputStyle.Paragraph,
+    required: true,
+    min_length: 1,
+    max_length: 1000,
+  });
   expect(centres).toMatchObject({
+    custom_id: "data-centres",
+    required: false,
     min_values: 0,
     max_values: Object.keys(DATA_CENTRE_LABEL).length,
     options: Object.entries(DATA_CENTRE_LABEL).map(([value, label]) => ({
@@ -173,6 +274,8 @@ test("subscribe offers optional multi-selects using all constant labels", () => 
     })),
   });
   expect(categories).toMatchObject({
+    custom_id: "categories",
+    required: false,
     min_values: 0,
     max_values: Object.keys(CATEGORY_LABEL).length,
     options: Object.entries(CATEGORY_LABEL).map(([value, label]) => ({
@@ -180,142 +283,334 @@ test("subscribe offers optional multi-selects using all constant labels", () => 
       label,
     })),
   });
+  expect(form.toJSON().components).toHaveLength(3);
 });
 
-test("subscribe saves both multi-selects only after confirmation", async () => {
+test("subscribe saves all submitted fields together and replies privately", async () => {
   const fixture = interactionFixture({
-    actions: [
-      { kind: "data-centres", values: ["Mana", "Light"] },
-      { kind: "categories", values: ["Trials", "HighEndDuty"] },
-      {
-        kind: "confirm",
-        before: () =>
-          expect(getStore().getSubscriptions(scopeA)).toHaveLength(0),
-      },
-    ],
+    submission: {
+      keyword: "(?i)Savage",
+      dataCentres: ["Mana", "Light"],
+      categories: ["Trials", "HighEndDuty"],
+      before: () => expect(getStore().getSubscriptions(scopeA)).toEqual([]),
+    },
   });
   await subscribeCommand(fixture.interaction);
+  expect(fixture.modals).toHaveLength(1);
+  expect(fixture.deferred[0]?.flags).toBe(MessageFlags.Ephemeral);
+  expect(getStore().getSubscriptions(scopeA)).toHaveLength(1);
   expect(getStore().getSubscriptions(scopeA)[0]).toMatchObject({
+    keyword: "(?i)Savage",
     dataCentres: ["Light", "Mana"],
     categories: ["HighEndDuty", "Trials"],
   });
-  expect(fixture.views.at(-1)?.content).toContain("Mana (JP)");
-  expect(fixture.views.at(-1)?.content).toContain("讨伐歼灭战");
-  expect(fixture.views.at(-1)?.components).toEqual([]);
+  expect(getStore().getSubscriptions(scopeB)).toEqual([]);
+  expect(fixture.views.at(-1)?.content).toContain("成功在当前频道创建招募订阅");
 });
 
-test("selections can be cleared and cancel or timeout never creates a subscription", async () => {
-  const cleared = interactionFixture({
-    actions: [
-      { kind: "data-centres", values: ["Mana"] },
-      { kind: "categories", values: ["Trials"] },
-      { kind: "data-centres", values: [] },
-      { kind: "categories", values: [] },
-      { kind: "confirm" },
-    ],
-  });
-  await subscribeCommand(cleared.interaction);
+test("subscribe allows unrestricted filters and closing or timeout never creates a subscription", async () => {
+  const fixture = interactionFixture();
+  await subscribeCommand(fixture.interaction);
   expect(getStore().getSubscriptions(scopeA)[0]).toMatchObject({
     dataCentres: [],
     categories: [],
   });
-  const cancelled = interactionFixture({
-    keyword: "Savage",
-    actions: [{ kind: "cancel" }],
-  });
-  await subscribeCommand(cancelled.interaction);
-  const timedOut = interactionFixture({ keyword: "Extreme" });
-  await subscribeCommand(timedOut.interaction);
+  const dismissed = interactionFixture({ submission: null });
+  await subscribeCommand(dismissed.interaction);
+  expect(dismissed.views.at(-1)?.content).toContain("超时");
+  expect(dismissed.views.at(-1)?.flags).toBe(MessageFlags.Ephemeral);
   expect(getStore().getSubscriptions(scopeA)).toHaveLength(1);
-  expect(cancelled.views.at(-1)?.content).toContain("已取消");
-  expect(timedOut.views.at(-1)?.content).toContain("超时");
-  expect(timedOut.views.at(-1)?.components).toEqual([]);
 });
 
-test("subscribe rechecks user and bot permissions before saving", async () => {
-  const revoked = interactionFixture({
-    actions: [{ kind: "confirm", permissions: new PermissionsBitField(0n) }],
-  });
-  await subscribeCommand(revoked.interaction);
-  expect(revoked.views.at(-1)?.content).toContain("管理频道权限");
-  const botRevoked = interactionFixture({
-    actions: [
-      {
-        kind: "confirm",
-        before: () => {
-          botRevoked.control.permissions = new PermissionsBitField(0n);
-        },
-      },
-    ],
-  });
-  await subscribeCommand(botRevoked.interaction);
-  expect(botRevoked.views.at(-1)?.content).toContain("机器人需要");
-  expect(getStore().getSubscriptions(scopeA)).toHaveLength(0);
+test("subscribe rejects invalid submitted patterns and filter values without saving", async () => {
+  for (const submission of [
+    { keyword: "[" },
+    { keyword: "" },
+    { keyword: "x".repeat(1001) },
+    { dataCentres: ["toString"] },
+    { categories: ["invalid"] },
+  ]) {
+    const fixture = interactionFixture({ submission });
+    await subscribeCommand(fixture.interaction);
+    expect(fixture.views.at(-1)?.content).toMatch(/无效|长度/);
+  }
+  expect(getStore().getSubscriptions(scopeA)).toEqual([]);
 });
 
-test("invalid patterns and filter values are rejected without saving", async () => {
-  const invalidPattern = interactionFixture({ keyword: "[" });
-  await subscribeCommand(invalidPattern.interaction);
-  expect(invalidPattern.views[0]?.content).toContain("无效的 RE2");
-  const invalidFilter = interactionFixture({
-    actions: [{ kind: "data-centres", values: ["toString"] }],
-  });
-  await subscribeCommand(invalidFilter.interaction);
-  expect(invalidFilter.componentReplies[0]?.content).toContain(
-    "无效的筛选条件",
-  );
-  expect(getStore().getSubscriptions(scopeA)).toHaveLength(0);
-});
-
-test("subscription sessions bind valid component actions to user, guild, channel and session", () => {
-  const selection = {
+test("form sessions bind submissions to user, guild, channel and session", () => {
+  const submitted = {
     user: { id: "user" },
     ...scopeA,
-    customId: "session:confirm",
-    isButton: () => true,
-    isStringSelectMenu: () => false,
-  } as unknown as MessageComponentInteraction;
-  expect(isSubscriptionInteraction(selection, "user", scopeA, "session")).toBe(
+    customId: "session:subscription",
+  } as unknown as ModalSubmitInteraction;
+  expect(isSubscriptionInteraction(submitted, "user", scopeA, "session")).toBe(
     true,
   );
-  expect(isSubscriptionInteraction(selection, "other", scopeA, "session")).toBe(
+  expect(isSubscriptionInteraction(submitted, "other", scopeA, "session")).toBe(
     false,
   );
-  expect(isSubscriptionInteraction(selection, "user", scopeB, "session")).toBe(
+  expect(isSubscriptionInteraction(submitted, "user", scopeB, "session")).toBe(
     false,
   );
   expect(
     isSubscriptionInteraction(
-      selection,
+      submitted,
       "user",
       { ...scopeA, guildId: "foreign" },
       "session",
     ),
   ).toBe(false);
   expect(
-    isSubscriptionInteraction(selection, "user", scopeA, "other-session"),
+    isSubscriptionInteraction(submitted, "user", scopeA, "other-session"),
   ).toBe(false);
 });
 
-test("runtime permissions reject commands even if Discord command defaults are overridden", async () => {
+test("runtime permissions reject commands even if Discord defaults are overridden", async () => {
   const fixture = interactionFixture();
   Object.defineProperty(fixture.interaction, "memberPermissions", {
     value: new PermissionsBitField(0n),
   });
   await subscribeCommand(fixture.interaction);
   await listCommand(fixture.interaction);
-  expect(getStore().getSubscriptions(scopeA)).toHaveLength(0);
+  await editCommand(fixture.interaction);
+  expect(fixture.modals).toEqual([]);
   expect(
     fixture.views.every((view) => view.content?.includes("管理频道权限")),
   ).toBe(true);
+  expect(getStore().getSubscriptions(scopeA)).toEqual([]);
 });
 
-test("subscribe validates bot permissions before saving", async () => {
+test("subscribe rechecks user and bot permissions on modal submission", async () => {
+  const revoked = interactionFixture({
+    submission: { permissions: new PermissionsBitField(0n) },
+  });
+  await subscribeCommand(revoked.interaction);
+  expect(revoked.views.at(-1)?.content).toContain("管理频道权限");
+  const botRevoked = interactionFixture({
+    submission: {
+      before: () => {
+        botRevoked.control.permissions = new PermissionsBitField(0n);
+      },
+    },
+  });
+  await subscribeCommand(botRevoked.interaction);
+  expect(botRevoked.views.at(-1)?.content).toContain("机器人需要");
+  expect(getStore().getSubscriptions(scopeA)).toEqual([]);
+});
+
+test("edit prepopulates every field and allows keyword changes within the same form", async () => {
+  const original = getStore().addSubscription(scopeA, "Ultimate", "creator", {
+    dataCentres: ["Mana"],
+    categories: ["HighEndDuty"],
+  });
+  if (!original.ok) throw new Error("setup failed");
+  const fixture = interactionFixture({
+    actions: [{ kind: "edit", id: original.sub.id }],
+    submission: {
+      keyword: "(?i)Savage",
+      dataCentres: ["Gaia", "Light"],
+      categories: ["Trials", "Raids"],
+      before: () =>
+        expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual(
+          original.sub,
+        ),
+    },
+  });
+  await editCommand(fixture.interaction);
+  expect(fixture.modals).toHaveLength(1);
+  const [keyword, centres, categories] = formFields(fixture.modals[0]!);
+  expect(keyword).toMatchObject({ value: "Ultimate" });
+  expect(centres).toMatchObject({
+    options: expect.arrayContaining([
+      { label: "Mana (JP)", value: "Mana", default: true },
+    ]),
+  });
+  expect(categories).toMatchObject({
+    options: expect.arrayContaining([
+      { label: "高难度任务", value: "HighEndDuty", default: true },
+    ]),
+  });
+  expect(getStore().getSubscriptions(scopeA)).toEqual([
+    {
+      ...original.sub,
+      keyword: "(?i)Savage",
+      dataCentres: ["Gaia", "Light"],
+      categories: ["Raids", "Trials"],
+    },
+  ]);
+  expect(fixture.views[1]?.components).toEqual([]);
+  expect(fixture.views.at(-1)?.content).toContain("成功在当前频道修改招募订阅");
+  expect(
+    fixture.deferred.every((reply) => reply.flags === MessageFlags.Ephemeral),
+  ).toBe(true);
+});
+
+test("edit can preserve all prefilled values or clear both filter sets", async () => {
+  const original = getStore().addSubscription(scopeA, "Extreme", "creator", {
+    dataCentres: ["Mana"],
+    categories: ["Trials"],
+  });
+  if (!original.ok) throw new Error("setup failed");
+  const unchanged = interactionFixture({
+    actions: [{ kind: "edit", id: original.sub.id }],
+  });
+  await editCommand(unchanged.interaction);
+  expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual(
+    original.sub,
+  );
+  const cleared = interactionFixture({
+    actions: [{ kind: "edit", id: original.sub.id }],
+    submission: { dataCentres: [], categories: [] },
+  });
+  await editCommand(cleared.interaction);
+  expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual({
+    ...original.sub,
+    dataCentres: [],
+    categories: [],
+  });
+});
+
+test("edit closing or timeout preserves the original subscription", async () => {
+  const original = getStore().addSubscription(scopeA, "Ultimate", "creator");
+  if (!original.ok) throw new Error("setup failed");
+  const fixture = interactionFixture({
+    actions: [{ kind: "edit", id: original.sub.id }],
+    submission: null,
+  });
+  await editCommand(fixture.interaction);
+  expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual(
+    original.sub,
+  );
+  expect(fixture.views.at(-1)?.content).toContain("超时");
+  expect(fixture.views[1]?.components).toEqual([]);
+});
+
+test("edit paginates and rejects foreign or off-page subscription IDs", async () => {
+  for (let i = 0; i < 26; i++)
+    getStore().addSubscription(scopeA, String(i), "creator");
+  const last = getStore().getSubscriptionsPage(scopeA, 1, 25).subscriptions[0]!;
+  const foreign = getStore().addSubscription(
+    scopeB,
+    "FOREIGN_SECRET",
+    "foreign-user",
+  );
+  if (!foreign.ok) throw new Error("setup failed");
+  for (const id of [foreign.sub.id, last.id]) {
+    const rejected = interactionFixture({ actions: [{ kind: "edit", id }] });
+    await editCommand(rejected.interaction);
+    expect(rejected.modals).toEqual([]);
+    expect(rejected.componentReplies[0]?.content).toContain("未找到");
+    expect(JSON.stringify(rejected.views)).not.toContain("FOREIGN_SECRET");
+  }
+  const fixture = interactionFixture({
+    actions: [{ kind: "next" }, { kind: "edit", id: last.id }],
+    submission: { keyword: "UPDATED" },
+  });
+  await editCommand(fixture.interaction);
+  expect(fixture.views[1]?.content).toContain("第 2/2 页");
+  expect(getStore().getSubscription(scopeA, last.id)?.keyword).toBe("UPDATED");
+  expect(getStore().getSubscriptions(scopeA)).toHaveLength(26);
+  expect(getStore().getSubscription(scopeB, foreign.sub.id)).toEqual(
+    foreign.sub,
+  );
+});
+
+test("edit rejects invalid or duplicate submitted conditions without changing data", async () => {
+  const original = getStore().addSubscription(scopeA, "Ultimate", "creator");
+  getStore().addSubscription(scopeA, "Savage", "another");
+  if (!original.ok) throw new Error("setup failed");
+  for (const submission of [
+    { keyword: "[" },
+    { dataCentres: ["toString"] },
+    { categories: ["invalid"] },
+    { keyword: "Savage" },
+  ]) {
+    const fixture = interactionFixture({
+      actions: [{ kind: "edit", id: original.sub.id }],
+      submission,
+    });
+    await editCommand(fixture.interaction);
+    expect(fixture.views.at(-1)?.content).toMatch(/无效|已有相同/);
+    expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual(
+      original.sub,
+    );
+  }
+  expect(getStore().getSubscriptions(scopeA)).toHaveLength(2);
+});
+
+test("edit rechecks user permissions at selection and submission and bot permissions at save", async () => {
+  const original = getStore().addSubscription(scopeA, "Ultimate", "creator");
+  if (!original.ok) throw new Error("setup failed");
+  const selectionRevoked = interactionFixture({
+    actions: [
+      {
+        kind: "edit",
+        id: original.sub.id,
+        permissions: new PermissionsBitField(0n),
+      },
+    ],
+  });
+  await editCommand(selectionRevoked.interaction);
+  expect(selectionRevoked.modals).toEqual([]);
+  expect(selectionRevoked.views.at(-1)?.content).toContain("管理频道权限");
+  const submitRevoked = interactionFixture({
+    actions: [{ kind: "edit", id: original.sub.id }],
+    submission: { keyword: "Savage", permissions: new PermissionsBitField(0n) },
+  });
+  await editCommand(submitRevoked.interaction);
+  expect(submitRevoked.views.at(-1)?.content).toContain("管理频道权限");
+  const botRevoked = interactionFixture({
+    actions: [{ kind: "edit", id: original.sub.id }],
+    submission: {
+      keyword: "Savage",
+      before: () => {
+        botRevoked.control.permissions = new PermissionsBitField(0n);
+      },
+    },
+  });
+  await editCommand(botRevoked.interaction);
+  expect(botRevoked.views.at(-1)?.content).toContain("机器人需要");
+  expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual(
+    original.sub,
+  );
+});
+
+test("edit handles deletion before selection or modal submission without recreating the subscription", async () => {
+  for (const step of ["selection", "submission"]) {
+    const original = getStore().addSubscription(scopeA, "Ultimate", "creator");
+    if (!original.ok) throw new Error("setup failed");
+    const fixture = interactionFixture({
+      actions: [
+        {
+          kind: "edit",
+          id: original.sub.id,
+          before: () => {
+            if (step === "selection")
+              getStore().removeSubscription(scopeA, original.sub.id);
+          },
+        },
+      ],
+      submission: {
+        keyword: "Savage",
+        before: () => {
+          if (step === "submission")
+            getStore().removeSubscription(scopeA, original.sub.id);
+        },
+      },
+    });
+    await editCommand(fixture.interaction);
+    expect(fixture.views.at(-1)?.content).toContain("未找到");
+    expect(getStore().getSubscriptions(scopeA)).toEqual([]);
+  }
+});
+
+test("edit handles an empty channel privately", async () => {
   const fixture = interactionFixture();
-  fixture.control.permissions = new PermissionsBitField(0n);
-  await subscribeCommand(fixture.interaction);
-  expect(getStore().getSubscriptions(scopeA)).toHaveLength(0);
-  expect(fixture.views[0]?.content).toContain("机器人需要");
+  await editCommand(fixture.interaction);
+  expect(fixture.deferred[0]?.flags).toBe(MessageFlags.Ephemeral);
+  expect(fixture.modals).toEqual([]);
+  expect(fixture.views[0]?.content).toContain("没有任何招募订阅");
+  expect(fixture.views[0]?.components).toEqual([]);
 });
 
 test("announcements and threads are supported while voice, forum and private messages are rejected", async () => {

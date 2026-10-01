@@ -4,6 +4,7 @@ import {
   type ChatInputCommandInteraction,
   type GuildTextBasedChannel,
   type MessageComponentInteraction,
+  type ModalSubmitInteraction,
   PermissionFlagsBits,
   Routes,
 } from "discord.js";
@@ -26,7 +27,10 @@ export function isNotificationChannel(
 }
 
 export function getCommandContext(
-  interaction: ChatInputCommandInteraction | MessageComponentInteraction,
+  interaction:
+    | ChatInputCommandInteraction
+    | MessageComponentInteraction
+    | ModalSubmitInteraction,
 ) {
   if (!interaction.inGuild() || !interaction.guildId) {
     return { ok: false as const, reason: "请在服务器频道中使用此命令。" };

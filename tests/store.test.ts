@@ -23,6 +23,141 @@ afterEach(() => {
 });
 
 describe("SQLite subscription scope", () => {
+  test("edits persist while preserving identity, metadata and delivery state", () => {
+    const directory = temporaryDirectory();
+    directories.push(directory);
+    const filename = join(directory, "edited.sqlite");
+    const store = open(filename);
+    const original = store.addSubscription(scopeA, "Ultimate", "creator");
+    if (!original.ok) throw new Error("setup failed");
+    store.saveDelivery(scopeA, "123", {
+      messageId: "message",
+      payloadHash: "hash",
+      updatedAt: 100,
+      expiresAt: 1000,
+    });
+    const delivery = store.getDelivery(scopeA, "123");
+    const updated = store.updateSubscription(
+      scopeA,
+      original.sub.id,
+      "(?i)Savage",
+      {
+        dataCentres: ["Mana", "Light", "Mana"],
+        categories: ["Trials", "HighEndDuty", "Trials"],
+      },
+    );
+    expect(updated).toEqual({
+      ok: true,
+      sub: {
+        ...original.sub,
+        keyword: "(?i)Savage",
+        dataCentres: ["Light", "Mana"],
+        categories: ["HighEndDuty", "Trials"],
+      },
+    });
+    store.close();
+    const reopened = open(filename);
+    expect(reopened.getSubscriptions(scopeA)).toEqual(
+      updated.ok ? [updated.sub] : [],
+    );
+    expect(reopened.getDelivery(scopeA, "123")).toEqual(delivery);
+    expect(
+      reopened.updateSubscription(scopeA, original.sub.id, "Extreme").ok,
+    ).toBe(true);
+    expect(reopened.getSubscription(scopeA, original.sub.id)).toMatchObject({
+      keyword: "Extreme",
+      dataCentres: ["Light", "Mana"],
+      categories: ["HighEndDuty", "Trials"],
+    });
+    expect(
+      reopened.updateSubscription(scopeA, original.sub.id, "Extreme", {
+        dataCentres: [],
+        categories: [],
+      }).ok,
+    ).toBe(true);
+    expect(reopened.getSubscription(scopeA, original.sub.id)).toMatchObject({
+      dataCentres: [],
+      categories: [],
+    });
+  });
+
+  test("single-subscription reads and updates require the matching guild and channel", () => {
+    const store = open();
+    const original = store.addSubscription(scopeA, "Ultimate", "creator");
+    if (!original.ok) throw new Error("setup failed");
+    for (const scope of [scopeB, { ...scopeA, guildId: "other-guild" }]) {
+      expect(store.getSubscription(scope, original.sub.id)).toBeNull();
+      expect(
+        store.updateSubscription(scope, original.sub.id, "Savage").ok,
+      ).toBe(false);
+    }
+    expect(store.updateSubscription(scopeA, "missing", "Savage").ok).toBe(
+      false,
+    );
+    expect(store.getSubscription(scopeA, original.sub.id)).toEqual(
+      original.sub,
+    );
+    expect(() =>
+      store.getSubscription({ guildId: "", channelId: "" }, original.sub.id),
+    ).toThrow();
+    expect(() =>
+      store.updateSubscription(
+        { guildId: "", channelId: "" },
+        original.sub.id,
+        "Savage",
+      ),
+    ).toThrow();
+  });
+
+  test("invalid and duplicate edits fail atomically, while saving unchanged data succeeds", () => {
+    const store = open();
+    const original = store.addSubscription(scopeA, "Ultimate", "creator", {
+      dataCentres: ["Mana", "Light"],
+      categories: ["Trials"],
+    });
+    const duplicate = store.addSubscription(scopeA, "Savage", "another", {
+      dataCentres: ["Light", "Mana"],
+      categories: ["Trials"],
+    });
+    if (!original.ok || !duplicate.ok) throw new Error("setup failed");
+    for (const keyword of ["", "[", "(?=Savage)", "x".repeat(1001)]) {
+      expect(
+        store.updateSubscription(scopeA, original.sub.id, keyword).ok,
+      ).toBe(false);
+    }
+    expect(
+      store.updateSubscription(scopeA, original.sub.id, "Extreme", {
+        dataCentres: ["invalid"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      store.updateSubscription(scopeA, original.sub.id, "Extreme", {
+        categories: ["invalid" as never],
+      }).ok,
+    ).toBe(false);
+    expect(
+      store.updateSubscription(scopeA, original.sub.id, "Savage", {
+        dataCentres: ["Mana", "Light", "Mana"],
+        categories: ["Trials", "Trials"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      store.updateSubscription(
+        scopeA,
+        original.sub.id,
+        original.sub.keyword,
+        original.sub,
+      ),
+    ).toEqual(original);
+    expect(store.getSubscription(scopeA, original.sub.id)).toEqual(
+      original.sub,
+    );
+    expect(store.getSubscription(scopeA, duplicate.sub.id)).toEqual(
+      duplicate.sub,
+    );
+    expect(store.getSubscriptions(scopeA)).toHaveLength(2);
+  });
+
   test("expired listing markers survive reopening and removing delivery records", () => {
     const directory = temporaryDirectory();
     directories.push(directory);

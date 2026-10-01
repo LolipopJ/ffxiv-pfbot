@@ -14,8 +14,9 @@ import { logger } from "../utils/logger";
 import { displaySubscriptionFilters } from "../utils/subscription";
 import { displayPattern, truncate } from "../utils/text";
 import { type ChannelScope, getStore, SubscriptionStore } from "./store";
+import { runSubscriptionForm } from "./subscription-form";
 
-type PagerMode = "list" | "unsubscribe";
+type PagerMode = "list" | "unsubscribe" | "edit";
 
 export function isPagerInteraction(
   interaction: MessageComponentInteraction,
@@ -27,7 +28,7 @@ export function isPagerInteraction(
     interaction.user.id === userId &&
     interaction.guildId === scope.guildId &&
     interaction.channelId === scope.channelId &&
-    ["previous", "next", "delete"].some(
+    ["previous", "next", "delete", "edit"].some(
       (action) => interaction.customId === `${session}:${action}`,
     )
   );
@@ -60,9 +61,9 @@ export function buildSubscriptionPage(
       )
       .join("");
   } else if (result.total > 0) {
-    content += "\n选择要取消的招募订阅：";
+    content += `\n选择要${mode === "edit" ? "编辑" : "取消"}的招募订阅：`;
     const select = new StringSelectMenuBuilder()
-      .setCustomId(`${session}:delete`)
+      .setCustomId(`${session}:${mode === "edit" ? "edit" : "delete"}`)
       .setPlaceholder("选择本页招募订阅")
       .addOptions(
         result.subscriptions.map((sub) => ({
@@ -140,7 +141,12 @@ export async function runSubscriptionPager(
       });
       return;
     }
-    if (selection.isStringSelectMenu() && mode === "unsubscribe") {
+    if (
+      selection.isStringSelectMenu() &&
+      selection.customId ===
+        `${session}:${mode === "edit" ? "edit" : "delete"}` &&
+      mode !== "list"
+    ) {
       const id = selection.values[0];
       if (!id || !view.subscriptions.some((sub) => sub.id === id)) {
         await selection.reply({
@@ -148,6 +154,23 @@ export async function runSubscriptionPager(
           flags: MessageFlags.Ephemeral,
         });
         continue;
+      }
+      if (mode === "edit") {
+        const subscription = store.getSubscription(context.scope, id);
+        if (!subscription) {
+          await selection.update({
+            content: "❌️ 未找到该招募订阅或无权操作。",
+            components: [],
+          });
+          return;
+        }
+        await runSubscriptionForm(selection, subscription, () =>
+          interaction.editReply({
+            content: "ℹ️ 请在弹窗中修改正则、数据中心和招募类别，提交后保存。",
+            components: [],
+          }),
+        );
+        return;
       }
       const removed = store.removeSubscription(context.scope, id);
       if (removed) {

@@ -17,11 +17,14 @@ test("long party fields hide optional jobs while preserving occupied and vacant 
     ...Array.from({ length: 7 }, () => ({
       filled: false,
       role: ["dps"] as Slot["role"],
-      acceptedJobs: Array.from({ length: 40 }, (_, i) => "JOB" + i),
+      acceptedJobs: Array.from(
+        { length: 40 },
+        (_, i) => "JOB" + i,
+      ) as Slot["acceptedJobs"],
     })),
   ];
   const result = buildPartyField(slots);
-  expect(result).toContain("PLD");
+  expect(result).toContain("骑士");
   expect(result).not.toContain("JOB");
   expect(result.split(" | ")).toHaveLength(8);
   expect(result.match(/⬜️/g)).toHaveLength(7);

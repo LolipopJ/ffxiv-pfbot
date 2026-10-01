@@ -624,6 +624,59 @@ test("multi-select filters use OR within each set and AND with the regex", async
     expect(context.store.getDelivery(scopeA, id)).toBeNull();
 });
 
+test("edited conditions take effect on the next check while retaining existing deliveries", async () => {
+  const context = setup(":memory:", {
+    dataCentres: ["Mana"],
+    categories: ["HighEndDuty"],
+  });
+  context.fetcher.mockImplementation(async () => [
+    listing({ id: "original" }),
+    listing({
+      id: "edited",
+      duty: "Savage",
+      rawText: "Savage Practice",
+      dataCentre: "Light",
+      category: "Trials",
+    }),
+    listing({ id: "wrong-regex", dataCentre: "Light", category: "Trials" }),
+    listing({
+      id: "wrong-centre",
+      duty: "Savage",
+      rawText: "Savage Practice",
+      category: "Trials",
+    }),
+    listing({
+      id: "wrong-category",
+      duty: "Savage",
+      rawText: "Savage Practice",
+      dataCentre: "Light",
+    }),
+  ]);
+  const monitor = createMonitor(context.client, context.store, context.fetcher);
+  await monitor.check();
+  expect(context.sends).toHaveLength(1);
+  const originalDelivery = context.store.getDelivery(scopeA, "original");
+  const subscription = context.store.getSubscriptions(scopeA)[0]!;
+  expect(
+    context.store.updateSubscription(scopeA, subscription.id, "Savage", {
+      dataCentres: ["Light"],
+      categories: ["Trials"],
+    }).ok,
+  ).toBe(true);
+  await monitor.check();
+  expect(context.sends).toHaveLength(2);
+  expect(
+    context.store
+      .getMonitorDeliveries()
+      .map((delivery) => delivery.listingId)
+      .sort(),
+  ).toEqual(["edited", "original"]);
+  expect(context.store.getDelivery(scopeA, "original")).toEqual(
+    originalDelivery,
+  );
+  expect(context.deletes).toEqual([]);
+});
+
 test("each empty filter independently leaves that dimension unrestricted", async () => {
   const cases: { filters: SubscriptionFilters; expected: string[] }[] = [
     { filters: {}, expected: ["mana-high", "gaia-high", "mana-trial"] },
@@ -663,7 +716,7 @@ test("the same regex with overlapping filters appears once in a notification", a
   await createMonitor(context.client, context.store, context.fetcher).check();
   expect(context.sends).toHaveLength(1);
   const payload = context.sends[0]!.payload as { embeds: EmbedBuilder[] };
-  expect(payload.embeds[0]!.toJSON().footer?.text).toBe("Mana | Ultimate");
+  expect(payload.embeds[0]!.toJSON().footer?.text).toBe("Ultimate");
 });
 
 test("failed sends retry and never mark the recruitment as delivered", async () => {

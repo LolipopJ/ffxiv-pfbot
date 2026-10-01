@@ -77,6 +77,18 @@ export function getKeywordError(keyword: string) {
   }
 }
 
+function validateSubscription(keyword: string, filters: SubscriptionFilters) {
+  const keywordError = getKeywordError(keyword);
+  if (keywordError) return { ok: false as const, reason: keywordError };
+  const dataCentres = [...new Set(filters.dataCentres ?? [])].sort();
+  const categories = [...new Set(filters.categories ?? [])].sort();
+  if (dataCentres.some((value) => !Object.hasOwn(DATA_CENTRE_LABEL, value)))
+    return { ok: false as const, reason: "无效的数据中心" };
+  if (categories.some((value) => !Object.hasOwn(CATEGORY_LABEL, value)))
+    return { ok: false as const, reason: "无效的招募类别" };
+  return { ok: true as const, dataCentres, categories };
+}
+
 function validateScope(scope: ChannelScope) {
   if (!scope.guildId || !scope.channelId)
     throw new Error("服务器和频道作用域不能为空");
@@ -133,14 +145,9 @@ export class SubscriptionStore {
     filters: SubscriptionFilters = {},
   ) {
     validateScope(scope);
-    const keywordError = getKeywordError(keyword);
-    if (keywordError) return { ok: false as const, reason: keywordError };
-    const dataCentres = [...new Set(filters.dataCentres ?? [])].sort();
-    const categories = [...new Set(filters.categories ?? [])].sort();
-    if (dataCentres.some((value) => !Object.hasOwn(DATA_CENTRE_LABEL, value)))
-      return { ok: false as const, reason: "无效的数据中心" };
-    if (categories.some((value) => !Object.hasOwn(CATEGORY_LABEL, value)))
-      return { ok: false as const, reason: "无效的招募类别" };
+    const validated = validateSubscription(keyword, filters);
+    if (!validated.ok) return validated;
+    const { dataCentres, categories } = validated;
     const sub: Subscription = {
       ...scope,
       id: randomUUID(),
@@ -175,6 +182,68 @@ export class SubscriptionStore {
           ok: false as const,
           reason: "该频道已有相同正则和筛选条件的招募订阅",
         };
+  }
+
+  getSubscription(scope: ChannelScope, id: string): Subscription | null {
+    validateScope(scope);
+    const row = this.db
+      .query<SubscriptionRow, [string, string, string]>(
+        `
+      SELECT ${SUBSCRIPTION_COLUMNS} FROM subscriptions
+      WHERE id = ? AND guild_id = ? AND channel_id = ?
+    `,
+      )
+      .get(id, scope.guildId, scope.channelId);
+    return row ? readSubscription(row) : null;
+  }
+
+  updateSubscription(
+    scope: ChannelScope,
+    id: string,
+    keyword: string,
+    filters: SubscriptionFilters = {},
+  ) {
+    validateScope(scope);
+    return this.db
+      .transaction(() => {
+        const current = this.getSubscription(scope, id);
+        if (!current)
+          return {
+            ok: false as const,
+            reason: "未找到该招募订阅或无权操作。",
+          };
+        const validated = validateSubscription(keyword, {
+          dataCentres: filters.dataCentres ?? current.dataCentres,
+          categories: filters.categories ?? current.categories,
+        });
+        if (!validated.ok) return validated;
+        const { dataCentres, categories } = validated;
+        const result = this.db
+          .query(
+            `
+        UPDATE OR IGNORE subscriptions SET keyword = ?, data_centres = ?, categories = ?
+        WHERE id = ? AND guild_id = ? AND channel_id = ?
+      `,
+          )
+          .run(
+            keyword,
+            JSON.stringify(dataCentres),
+            JSON.stringify(categories),
+            id,
+            scope.guildId,
+            scope.channelId,
+          );
+        return result.changes
+          ? {
+              ok: true as const,
+              sub: { ...current, keyword, dataCentres, categories },
+            }
+          : {
+              ok: false as const,
+              reason: "该频道已有相同正则和筛选条件的招募订阅",
+            };
+      })
+      .immediate();
   }
 
   getSubscriptions(scope: ChannelScope): Subscription[] {
