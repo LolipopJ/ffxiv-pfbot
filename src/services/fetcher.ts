@@ -3,6 +3,7 @@ import type { Element } from "domhandler";
 
 import type {
   Category,
+  Job,
   Recruitment,
   Slot,
   SlotRole,
@@ -139,7 +140,7 @@ function parseSlot($el: cheerio.Cheerio<Element>): Slot {
   const filled = classes.includes("filled");
 
   const role: SlotRole[] = [];
-  const acceptedJobs: string[] = [];
+  const acceptedJobs: Job[] = [];
 
   if (classes.includes("empty")) {
     role.push("empty");
@@ -148,7 +149,12 @@ function parseSlot($el: cheerio.Cheerio<Element>): Slot {
     if (classes.includes("tank")) role.push("tank");
     if (classes.includes("healer")) role.push("healer");
     if (classes.includes("dps")) role.push("dps");
-    acceptedJobs.push(...title.split(/\s+/).filter(Boolean));
+    if (role.length === 3) {
+      // 空位包含三种职能时，简化为 ANY 所有人处理
+      acceptedJobs.push("ANY");
+    } else {
+      acceptedJobs.push(...(title.split(/\s+/).filter(Boolean) as Job[]));
+    }
   }
 
   return { filled, role, acceptedJobs };

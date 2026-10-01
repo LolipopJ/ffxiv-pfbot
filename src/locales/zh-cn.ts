@@ -67,6 +67,7 @@ export const JOB_LABEL: Record<Job, string> = {
   RDM: "赤魔法师",
   PCT: "绘灵法师",
   BLU: "青魔法师",
+  ANY: "所有人",
 };
 
 export { DICT };

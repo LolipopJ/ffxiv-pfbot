@@ -77,4 +77,5 @@ export type Job =
   | "ACN"
   | "RDM"
   | "PCT"
-  | "BLU";
+  | "BLU"
+  | "ANY";
