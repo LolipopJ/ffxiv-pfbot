@@ -10,6 +10,7 @@ import {
 } from "discord.js";
 
 import { getCommandContext } from "../utils/channel";
+import { displaySubscriptionFilters } from "../utils/subscription";
 import { displayPattern, truncate } from "../utils/text";
 import { type ChannelScope, getStore, SubscriptionStore } from "./store";
 
@@ -54,7 +55,7 @@ export function buildSubscriptionPage(
     content += result.subscriptions
       .map(
         (sub, index) =>
-          `\n\n${result.page * 5 + index + 1}. ${displayPattern(sub.keyword)}\nID: ${sub.id} ｜ 创建者: <@${sub.userId}>`,
+          `\n\n${result.page * 5 + index + 1}. ${displayPattern(sub.keyword)}\n${displaySubscriptionFilters(sub, 50).replace("\n", " ｜ ")}\nID: ${sub.id} ｜ 创建者: <@${sub.userId}>`,
       )
       .join("");
   } else if (result.total > 0) {
@@ -65,7 +66,10 @@ export function buildSubscriptionPage(
       .addOptions(
         result.subscriptions.map((sub) => ({
           label: truncate(sub.keyword.replace(/\s+/g, " "), 90) || "（空正则）",
-          description: `ID: ${sub.id}`,
+          description: truncate(
+            displaySubscriptionFilters(sub).replace("\n", " ｜ "),
+            100,
+          ),
           value: sub.id,
         })),
       );

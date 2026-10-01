@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "path";
 
@@ -73,7 +74,10 @@ describe("SQLite subscription scope", () => {
     directories.push(directory);
     const filename = join(directory, "state.sqlite");
     const first = open(filename);
-    first.addSubscription(scopeA, ".*", "user");
+    first.addSubscription(scopeA, ".*", "user", {
+      dataCentres: ["Mana", "Light"],
+      categories: ["Trials", "HighEndDuty"],
+    });
     first.saveDelivery(scopeA, "123", {
       messageId: "message-1",
       payloadHash: "hash",
@@ -81,10 +85,108 @@ describe("SQLite subscription scope", () => {
     first.close();
     const second = open(filename);
     expect(second.getSubscriptions(scopeA)).toHaveLength(1);
+    expect(second.getSubscriptions(scopeA)[0]).toMatchObject({
+      dataCentres: ["Light", "Mana"],
+      categories: ["HighEndDuty", "Trials"],
+    });
     expect(second.getDelivery(scopeA, "123")).toEqual({
       messageId: "message-1",
       payloadHash: "hash",
     });
+  });
+
+  test("filter sets are normalized for uniqueness and unknown constants are rejected", () => {
+    const store = open();
+    const filters = {
+      dataCentres: ["Mana", "Light", "Mana"],
+      categories: ["Trials", "HighEndDuty"] as const,
+    };
+    expect(
+      store.addSubscription(scopeA, "Ultimate", "user", {
+        ...filters,
+        categories: [...filters.categories],
+      }).ok,
+    ).toBe(true);
+    expect(
+      store.addSubscription(scopeA, "Ultimate", "user", {
+        dataCentres: ["Light", "Mana"],
+        categories: ["HighEndDuty", "Trials"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      store.addSubscription(scopeA, "Ultimate", "user", {
+        dataCentres: ["Gaia"],
+      }).ok,
+    ).toBe(true);
+    expect(store.addSubscription(scopeA, "Ultimate", "user").ok).toBe(true);
+    expect(
+      store.addSubscription(scopeA, "Ultimate", "user", {
+        dataCentres: ["toString"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      store.addSubscription(scopeA, "Ultimate", "user", {
+        categories: ["invalid" as never],
+      }).ok,
+    ).toBe(false);
+    expect(store.getSubscriptions(scopeA)).toHaveLength(3);
+    expect(store.getSubscriptionsPage(scopeA).subscriptions).toEqual(
+      store.getSubscriptions(scopeA),
+    );
+    expect(
+      store
+        .getMonitorSubscriptions()
+        .every(
+          (sub) =>
+            Array.isArray(sub.dataCentres) && Array.isArray(sub.categories),
+        ),
+    ).toBe(true);
+  });
+
+  test("legacy databases migrate without losing subscriptions or delivery state", () => {
+    const directory = temporaryDirectory();
+    directories.push(directory);
+    const filename = join(directory, "legacy.sqlite");
+    const legacy = new Database(filename);
+    legacy.run(`
+      CREATE TABLE subscriptions (
+        id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+        keyword TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL,
+        UNIQUE (guild_id, channel_id, keyword)
+      );
+      INSERT INTO subscriptions VALUES ('legacy-id', 'guild-A', 'channel-A', 'Ultimate', 'user', '2026-09-01T00:00:00.000Z');
+      CREATE TABLE deliveries (
+        guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, listing_id TEXT NOT NULL,
+        message_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
+        PRIMARY KEY (guild_id, channel_id, listing_id)
+      );
+      INSERT INTO deliveries VALUES ('guild-A', 'channel-A', '123', 'message-1', 'hash');
+    `);
+    legacy.close();
+    const migrated = open(filename);
+    expect(migrated.getSubscriptions(scopeA)).toEqual([
+      {
+        ...scopeA,
+        id: "legacy-id",
+        keyword: "Ultimate",
+        userId: "user",
+        createdAt: "2026-09-01T00:00:00.000Z",
+        dataCentres: [],
+        categories: [],
+      },
+    ]);
+    expect(migrated.getDelivery(scopeA, "123")).toEqual({
+      messageId: "message-1",
+      payloadHash: "hash",
+    });
+    expect(migrated.addSubscription(scopeA, "Ultimate", "user").ok).toBe(false);
+    expect(
+      migrated.addSubscription(scopeA, "Ultimate", "user", {
+        dataCentres: ["Mana"],
+      }).ok,
+    ).toBe(true);
+    migrated.close();
+    expect(open(filename).getSubscriptions(scopeA)).toHaveLength(2);
   });
 
   test("concurrent SQLite writers do not lose updates", async () => {

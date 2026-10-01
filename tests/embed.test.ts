@@ -1,9 +1,15 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
 
 import { buildNotification } from "../src/services/monitor";
 import type { Slot } from "../src/types/recruitment";
-import { buildListingEmbed, buildPartyField } from "../src/utils/embed";
+import {
+  buildListingEmbed,
+  buildPartyField,
+  getListingPublishedAt,
+} from "../src/utils/embed";
 import { listing } from "./helpers";
+
+afterEach(() => mock.restore());
 
 test("long party fields hide optional jobs while preserving occupied and vacant slots", () => {
   const slots: Slot[] = [
@@ -27,7 +33,7 @@ test("short party fields retain selectable jobs", () => {
     buildPartyField([
       { filled: false, role: ["dps"], acceptedJobs: ["MNK", "SAM"] },
     ]),
-  ).toBe("(MNK, SAM)");
+  ).toBe("❓️MNK, SAM");
 });
 
 test("all embed fields and aggregate content stay inside Discord limits", () => {
@@ -52,7 +58,7 @@ test("all embed fields and aggregate content stay inside Discord limits", () => 
   ).toBe(true);
   const length =
     embed.title!.length +
-    embed.footer!.text.length +
+    (embed.footer?.text.length ?? 0) +
     embed.fields!.reduce(
       (sum, field) => sum + field.name.length + field.value.length,
       0,
@@ -62,16 +68,85 @@ test("all embed fields and aggregate content stay inside Discord limits", () => 
     listing(),
     Array.from({ length: 100 }, () => long),
   );
-  expect(notification.payload.content.length).toBeLessThanOrEqual(2000);
+  expect(
+    notification.payload.embeds[0]!.toJSON().footer!.text.length,
+  ).toBeLessThanOrEqual(512);
   expect(notification.payload.allowedMentions.parse).toEqual([]);
 });
 
 test("clock changes alone do not change notification fingerprints", () => {
+  const clock = spyOn(Date, "now").mockReturnValue(
+    Date.parse("2026-10-01T12:00:00.000Z"),
+  );
   const first = buildNotification(listing(), ["Ultimate"]);
+  clock.mockReturnValue(Date.parse("2026-10-01T12:05:00.000Z"));
   const second = buildNotification(listing(), ["Ultimate"]);
   expect(first.payloadHash).toBe(second.payloadHash);
   expect(
     buildNotification(listing({ description: "Changed" }), ["Ultimate"])
       .payloadHash,
   ).not.toBe(first.payloadHash);
+});
+
+test.each([
+  ["in 16 seconds", 16_000],
+  ["in 14 minutes", 14 * 60_000],
+  ["in an hour", 3_600_000],
+  ["in a minute", 60_000],
+  ["in a second", 1000],
+  ["in 1 hour", 3_600_000],
+  [" IN  2 MINUTES ", 120_000],
+  ["now", 0],
+] as const)(
+  "embed timestamps infer publication from %s",
+  (expires, remaining) => {
+    const now = Date.parse("2026-10-01T12:00:00.000Z");
+    const publishedAt = now + remaining - 3_600_000;
+    expect(getListingPublishedAt(expires, now)).toBe(publishedAt);
+    expect(
+      buildListingEmbed(listing({ expires }), now).toJSON().timestamp,
+    ).toBe(new Date(publishedAt).toISOString());
+  },
+);
+
+test.each(["", "unknown", "in two minutes", "in -1 minutes", "in 2 hours"])(
+  "unrecognized expiry %s does not fabricate a publication timestamp",
+  (expires) => {
+    expect(getListingPublishedAt(expires)).toBeNull();
+    expect(
+      buildListingEmbed(listing({ expires })).toJSON().timestamp,
+    ).toBeUndefined();
+  },
+);
+
+test.each([
+  ["[Practice] P5 中文", "[Practice] P5 中文"],
+  ["**bold**", "\\*\\*bold\\*\\*"],
+  ["_italic_", "\\_italic\\_"],
+  ["__underline__", "\\_\\_underline\\_\\_"],
+  ["~~strike~~", "\\~\\~strike\\~\\~"],
+  ["||spoiler||", "\\|\\|spoiler\\|\\|"],
+  ["`code`", "\\`code\\`"],
+  ["```code```", "\\`\\`\\`code\\`\\`\\`"],
+  ["# heading", "\\# heading"],
+  ["- item", "\\- item"],
+  ["1. item", "1\\. item"],
+  ["> quote", "\\> quote"],
+  ["-# subtext", "\\-# subtext"],
+  ["[link](https://example.com)", "\\[link](https://example.com)"],
+  ["\\path", "\\\\path"],
+])("description preserves %s as literal text", (description, expected) => {
+  const embed = buildListingEmbed(listing({ description })).toJSON();
+  expect(embed.fields![0]!.value).toBe(expected);
+});
+
+test("escaped descriptions stay in bounds without cutting an escape sequence", () => {
+  const description = "x".repeat(1022) + "**bold**";
+  const value = buildListingEmbed(listing({ description })).toJSON().fields![0]!
+    .value;
+  expect(value).toBe("x".repeat(1022) + "…");
+  expect(value.length).toBeLessThanOrEqual(1024);
+  expect(
+    buildListingEmbed(listing({ description: "" })).toJSON().fields![0]!.value,
+  ).toBe("—");
 });

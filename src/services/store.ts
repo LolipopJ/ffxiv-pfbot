@@ -4,9 +4,17 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { RE2JS } from "re2js";
 
+import { CategoryLabel, DataCentre } from "../constants";
+import type { Category } from "../types/recruitment";
+
 export interface ChannelScope {
   guildId: string;
   channelId: string;
+}
+
+export interface SubscriptionFilters {
+  dataCentres?: string[];
+  categories?: Category[];
 }
 
 export interface Subscription extends ChannelScope {
@@ -14,6 +22,16 @@ export interface Subscription extends ChannelScope {
   keyword: string;
   userId: string;
   createdAt: string;
+  dataCentres: string[];
+  categories: Category[];
+}
+
+interface SubscriptionRow extends Omit<
+  Subscription,
+  "dataCentres" | "categories"
+> {
+  dataCentres: string;
+  categories: string;
 }
 
 export interface Delivery {
@@ -22,7 +40,27 @@ export interface Delivery {
 }
 
 const SUBSCRIPTION_COLUMNS = `id, guild_id AS guildId, channel_id AS channelId,
-  keyword, user_id AS userId, created_at AS createdAt`;
+  keyword, user_id AS userId, created_at AS createdAt,
+  data_centres AS dataCentres, categories`;
+
+function readSubscription(row: SubscriptionRow): Subscription {
+  return {
+    ...row,
+    dataCentres: JSON.parse(row.dataCentres),
+    categories: JSON.parse(row.categories),
+  };
+}
+
+export function getKeywordError(keyword: string) {
+  if (keyword.length === 0 || keyword.length > 1000)
+    return "正则表达式长度必须为 1–1000 字符";
+  try {
+    RE2JS.compile(keyword);
+    return null;
+  } catch {
+    return "无效的 RE2 正则表达式";
+  }
+}
 
 function validateScope(scope: ChannelScope) {
   if (!scope.guildId || !scope.channelId)
@@ -47,7 +85,9 @@ export class SubscriptionStore {
         keyword TEXT NOT NULL,
         user_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        UNIQUE (guild_id, channel_id, keyword)
+        data_centres TEXT NOT NULL DEFAULT '[]',
+        categories TEXT NOT NULL DEFAULT '[]',
+        UNIQUE (guild_id, channel_id, keyword, data_centres, categories)
       );
       CREATE TABLE IF NOT EXISTS deliveries (
         guild_id TEXT NOT NULL,
@@ -61,29 +101,37 @@ export class SubscriptionStore {
     `);
   }
 
-  addSubscription(scope: ChannelScope, keyword: string, userId: string) {
+  addSubscription(
+    scope: ChannelScope,
+    keyword: string,
+    userId: string,
+    filters: SubscriptionFilters = {},
+  ) {
     validateScope(scope);
-    if (keyword.length === 0 || keyword.length > 1000) {
-      return { ok: false as const, reason: "正则表达式长度必须为 1–1000 字符" };
-    }
-    try {
-      RE2JS.compile(keyword);
-    } catch {
-      return { ok: false as const, reason: "无效的 RE2 正则表达式" };
-    }
+    const keywordError = getKeywordError(keyword);
+    if (keywordError) return { ok: false as const, reason: keywordError };
+    const dataCentres = [...new Set(filters.dataCentres ?? [])].sort();
+    const categories = [...new Set(filters.categories ?? [])].sort();
+    if (dataCentres.some((value) => !Object.hasOwn(DataCentre, value)))
+      return { ok: false as const, reason: "无效的数据中心" };
+    if (categories.some((value) => !Object.hasOwn(CategoryLabel, value)))
+      return { ok: false as const, reason: "无效的招募类别" };
     const sub: Subscription = {
       ...scope,
       id: randomUUID(),
       keyword,
       userId,
       createdAt: new Date().toISOString(),
+      dataCentres,
+      categories,
     };
     const result = this.db
       .query(
         `
-      INSERT INTO subscriptions (id, guild_id, channel_id, keyword, user_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (guild_id, channel_id, keyword) DO NOTHING
+      INSERT INTO subscriptions
+        (id, guild_id, channel_id, keyword, user_id, created_at, data_centres, categories)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (guild_id, channel_id, keyword, data_centres, categories) DO NOTHING
     `,
       )
       .run(
@@ -93,22 +141,25 @@ export class SubscriptionStore {
         keyword,
         userId,
         sub.createdAt,
+        JSON.stringify(dataCentres),
+        JSON.stringify(categories),
       );
     return result.changes
       ? { ok: true as const, sub }
-      : { ok: false as const, reason: "该频道已有相同的正则订阅" };
+      : { ok: false as const, reason: "该频道已有相同正则和筛选条件的订阅" };
   }
 
   getSubscriptions(scope: ChannelScope): Subscription[] {
     validateScope(scope);
     return this.db
-      .query<Subscription, [string, string]>(
+      .query<SubscriptionRow, [string, string]>(
         `
       SELECT ${SUBSCRIPTION_COLUMNS} FROM subscriptions
       WHERE guild_id = ? AND channel_id = ? ORDER BY created_at, id
     `,
       )
-      .all(scope.guildId, scope.channelId);
+      .all(scope.guildId, scope.channelId)
+      .map(readSubscription);
   }
 
   getSubscriptionsPage(scope: ChannelScope, page = 0, pageSize = 5) {
@@ -132,13 +183,14 @@ export class SubscriptionStore {
       const pageCount = Math.max(1, Math.ceil(total / pageSize));
       const currentPage = Math.max(0, Math.min(page, pageCount - 1));
       const subscriptions = this.db
-        .query<Subscription, [string, string, number, number]>(
+        .query<SubscriptionRow, [string, string, number, number]>(
           `
         SELECT ${SUBSCRIPTION_COLUMNS} FROM subscriptions
         WHERE guild_id = ? AND channel_id = ? ORDER BY created_at, id LIMIT ? OFFSET ?
       `,
         )
-        .all(scope.guildId, scope.channelId, pageSize, currentPage * pageSize);
+        .all(scope.guildId, scope.channelId, pageSize, currentPage * pageSize)
+        .map(readSubscription);
       return { subscriptions, total, pageCount, page: currentPage };
     })();
   }
@@ -159,12 +211,13 @@ export class SubscriptionStore {
   // Only the trusted background monitor may enumerate all channel scopes.
   getMonitorSubscriptions(): Subscription[] {
     return this.db
-      .query<Subscription, []>(
+      .query<SubscriptionRow, []>(
         `
       SELECT ${SUBSCRIPTION_COLUMNS} FROM subscriptions ORDER BY guild_id, channel_id, id
     `,
       )
-      .all();
+      .all()
+      .map(readSubscription);
   }
 
   getDelivery(scope: ChannelScope, listingId: string): Delivery | null {

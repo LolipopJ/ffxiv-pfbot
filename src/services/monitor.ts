@@ -4,8 +4,8 @@ import { RE2JS } from "re2js";
 
 import type { Recruitment } from "../types/recruitment";
 import { getBotSendError, isNotificationChannel } from "../utils/channel";
-import { buildListingEmbed } from "../utils/embed";
-import { displayPattern, truncate } from "../utils/text";
+import { buildListingEmbed, field } from "../utils/embed";
+import { displayPattern } from "../utils/text";
 import { getListings } from "./fetcher";
 import { type ChannelScope, getStore, SubscriptionStore } from "./store";
 
@@ -19,19 +19,20 @@ function isMissingMessage(error: unknown) {
 }
 
 export function buildNotification(listing: Recruitment, patterns: string[]) {
-  const embed = buildListingEmbed(listing);
-  const content = truncate(
-    `🔔 **招募匹配！** | 正则: ${patterns.map((pattern) => displayPattern(pattern)).join("、")}`,
-    1900,
-  );
+  const embed = buildListingEmbed(listing).setFooter({
+    text: field(
+      `${listing.dataCentre} | ${patterns.map((pattern) => displayPattern(pattern)).join("、")}`,
+      512,
+    ),
+  });
+
   const stableEmbed = embed.toJSON();
   delete stableEmbed.timestamp;
   const payloadHash = createHash("sha256")
-    .update(JSON.stringify({ content, embed: stableEmbed }))
+    .update(JSON.stringify({ embed: stableEmbed }))
     .digest("hex");
   return {
     payload: {
-      content,
       embeds: [embed],
       allowedMentions: { parse: [] as never[] },
     },
@@ -87,16 +88,20 @@ export function createMonitor(
           const patterns = subscriptions
             .filter(
               ({ sub, regex }) =>
-                activeIds.has(sub.id) && regex.test(listing.rawText),
+                activeIds.has(sub.id) &&
+                (sub.dataCentres.length === 0 ||
+                  sub.dataCentres.includes(listing.dataCentre)) &&
+                (sub.categories.length === 0 ||
+                  sub.categories.includes(listing.category)) &&
+                regex.test(listing.rawText),
             )
             .map(({ sub }) => sub.keyword)
             .sort();
           if (patterns.length === 0) continue;
           try {
-            const { payload, payloadHash } = buildNotification(
-              listing,
-              patterns,
-            );
+            const { payload, payloadHash } = buildNotification(listing, [
+              ...new Set(patterns),
+            ]);
             const previous = store.getDelivery(scope, listing.id);
             if (previous?.payloadHash === payloadHash) continue;
             if (previous) {

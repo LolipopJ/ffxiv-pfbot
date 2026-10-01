@@ -1,9 +1,16 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { ChannelType, PermissionsBitField } from "discord.js";
+import {
+  ChannelType,
+  type EmbedBuilder,
+  PermissionsBitField,
+} from "discord.js";
 import { join } from "path";
 
 import { createMonitor } from "../src/services/monitor";
-import { SubscriptionStore } from "../src/services/store";
+import {
+  type SubscriptionFilters,
+  SubscriptionStore,
+} from "../src/services/store";
 import {
   fakeChannel,
   fakeClient,
@@ -16,12 +23,12 @@ import {
 
 const stores: SubscriptionStore[] = [];
 const directories: string[] = [];
-function setup(filename = ":memory:") {
+function setup(filename = ":memory:", filters: SubscriptionFilters = {}) {
   const store = new SubscriptionStore(filename);
   stores.push(store);
   const channel = fakeChannel();
   const fetcher = mock(async () => [listing()]);
-  store.addSubscription(scopeA, "Ultimate", "user");
+  store.addSubscription(scopeA, "Ultimate", "user", filters);
   return { store, ...channel, fetcher, client: fakeClient([channel.channel]) };
 }
 afterEach(() => {
@@ -40,6 +47,68 @@ test("overlapping patterns and duplicate listing rows send one message", async (
   await monitor.check();
   expect(context.sends).toHaveLength(1);
   expect(context.edits).toHaveLength(0);
+});
+
+test("multi-select filters use OR within each set and AND with the regex", async () => {
+  const context = setup(":memory:", {
+    dataCentres: ["Mana", "Light"],
+    categories: ["HighEndDuty", "Trials"],
+  });
+  context.fetcher.mockImplementation(async () => [
+    listing({ id: "mana-high" }),
+    listing({ id: "light-trial", dataCentre: "Light", category: "Trials" }),
+    listing({ id: "wrong-centre", dataCentre: "Gaia" }),
+    listing({ id: "wrong-category", category: "None" }),
+    listing({ id: "wrong-regex", rawText: "Extreme Practice" }),
+  ]);
+  await createMonitor(context.client, context.store, context.fetcher).check();
+  expect(context.sends).toHaveLength(2);
+  expect(context.store.getDelivery(scopeA, "mana-high")).not.toBeNull();
+  expect(context.store.getDelivery(scopeA, "light-trial")).not.toBeNull();
+  for (const id of ["wrong-centre", "wrong-category", "wrong-regex"])
+    expect(context.store.getDelivery(scopeA, id)).toBeNull();
+});
+
+test("each empty filter independently leaves that dimension unrestricted", async () => {
+  const cases: { filters: SubscriptionFilters; expected: string[] }[] = [
+    { filters: {}, expected: ["mana-high", "gaia-high", "mana-trial"] },
+    {
+      filters: { dataCentres: ["Mana"], categories: [] },
+      expected: ["mana-high", "mana-trial"],
+    },
+    {
+      filters: { dataCentres: [], categories: ["HighEndDuty"] },
+      expected: ["mana-high", "gaia-high"],
+    },
+  ];
+  for (const { filters, expected } of cases) {
+    const context = setup(":memory:", filters);
+    context.fetcher.mockImplementation(async () => [
+      listing({ id: "mana-high" }),
+      listing({ id: "gaia-high", dataCentre: "Gaia" }),
+      listing({ id: "mana-trial", category: "Trials" }),
+    ]);
+    await createMonitor(context.client, context.store, context.fetcher).check();
+    expect(context.sends).toHaveLength(expected.length);
+    for (const id of ["mana-high", "gaia-high", "mana-trial"])
+      expect(context.store.getDelivery(scopeA, id) !== null).toBe(
+        expected.includes(id),
+      );
+  }
+});
+
+test("the same regex with overlapping filters appears once in a notification", async () => {
+  const context = setup(":memory:", { dataCentres: ["Mana"] });
+  context.store.addSubscription(scopeA, "Ultimate", "user", {
+    categories: ["HighEndDuty"],
+  });
+  context.store.addSubscription(scopeA, "Foreign", "user", {
+    dataCentres: ["Gaia"],
+  });
+  await createMonitor(context.client, context.store, context.fetcher).check();
+  expect(context.sends).toHaveLength(1);
+  const payload = context.sends[0]!.payload as { embeds: EmbedBuilder[] };
+  expect(payload.embeds[0]!.toJSON().footer?.text).toBe("Mana | Ultimate");
 });
 
 test("failed sends retry and never mark the recruitment as delivered", async () => {
