@@ -23,6 +23,11 @@ export interface CleanupResult {
   fetchFailed: boolean;
 }
 
+export interface CleanupSnapshot {
+  listings?: ReadonlyMap<string, Recruitment>;
+  fetchFailed: boolean;
+}
+
 export function formatCleanupResult(result: CleanupResult) {
   return (
     `${result.failed || result.unlinked || result.fetchFailed ? "⚠️" : "✅"} 已清理 ${result.removed} 条消息及投递记录，失败 ${result.failed} 条（保留记录供重试）。订阅配置已保留。` +
@@ -133,6 +138,7 @@ export function createCleanup(
     force: boolean,
     scope?: ChannelScope,
     subscriptionId?: string,
+    snapshot?: CleanupSnapshot,
   ) => {
     if (stopped) return Promise.reject(new Error("清理服务已停止"));
     // Any manual/automatic invocation restarts the one-hour countdown after completion.
@@ -149,10 +155,11 @@ export function createCleanup(
           removed: 0,
           failed: 0,
           unlinked: 0,
-          fetchFailed: false,
+          fetchFailed: snapshot?.fetchFailed ?? false,
         };
-        let listings: Map<string, Recruitment> | undefined;
+        let listings = snapshot?.listings;
         if (
+          !snapshot &&
           !force &&
           (store.getMonitorDeliveries().length > 0 ||
             store.getExpiredListingIds().length > 0)
@@ -218,6 +225,9 @@ export function createCleanup(
   const clear = (scope?: ChannelScope) => run(false, scope);
   return {
     clear,
+    // Monitor refreshes deadlines and fills this snapshot before this queued task runs.
+    clearAfterMonitor: (snapshot: CleanupSnapshot) =>
+      run(false, undefined, undefined, snapshot),
     idle: () => Promise.allSettled([...jobs]),
     reset: (scope: ChannelScope, subscriptionId?: string) =>
       run(true, scope, subscriptionId),

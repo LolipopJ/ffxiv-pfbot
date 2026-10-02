@@ -9,6 +9,7 @@ import { buildListingEmbed, field } from "../utils/embed";
 import { LISTING_LIFETIME_MS } from "../utils/listing-time";
 import { logger } from "../utils/logger";
 import { displayPattern } from "../utils/text";
+import { type CleanupSnapshot, createCleanup, getCleanup } from "./cleanup";
 import { getListings } from "./fetcher";
 import { refreshListingState } from "./listing-state";
 import { type ChannelScope, getStore, SubscriptionStore } from "./store";
@@ -45,10 +46,11 @@ export function createMonitor(
   store: SubscriptionStore,
   fetchListings: () => Promise<Recruitment[]> = getListings,
   now: () => number = Date.now,
+  cleanup = createCleanup(client, store, fetchListings, now),
 ) {
   let inFlight: Promise<void> | undefined;
 
-  const notify = async () => {
+  const notify = async (snapshot: CleanupSnapshot) => {
     const startedAt = now();
     const stats = { sent: 0, edited: 0, failed: 0 };
     const scopes = new Map<string, ChannelScope>();
@@ -72,11 +74,17 @@ export function createMonitor(
       listings = new Map(
         (await fetchListings()).map((listing) => [listing.id, listing]),
       );
+      snapshot.listings = listings;
     } catch (error) {
       stats.failed++;
-      logger.error("监控", "抓取招募失败，下次检查重试；清理由独立任务处理", {
-        error,
-      });
+      snapshot.fetchFailed = true;
+      logger.error(
+        "监控",
+        "抓取招募失败，下次检查重试；本轮仅按数据库期限清理",
+        {
+          error,
+        },
+      );
     }
     const observedAt = now();
     const { listingExpiries, expiredListingIds, isListingExpired } =
@@ -245,11 +253,19 @@ export function createMonitor(
 
   return {
     check(): Promise<void> {
-      return (inFlight ??= getTaskRunner(client)
-        .run("fetching", notify)
+      if (inFlight) return inFlight;
+      const snapshot: CleanupSnapshot = { fetchFailed: false };
+      const monitoring = getTaskRunner(client)
+        .run("fetching", () => notify(snapshot))
         .catch((error) => {
           logger.error("监控", "监控任务异常，下次检查重试", { error });
-        })
+        });
+      // Queue both phases now so cleanup stays adjacent and shutdown drains both.
+      const clearing = cleanup.clearAfterMonitor(snapshot).catch((error) => {
+        logger.error("清理", "监控后的自动清理异常，下次清理重试", { error });
+      });
+      return (inFlight = Promise.all([monitoring, clearing])
+        .then(() => {})
         .finally(() => {
           inFlight = undefined;
         }));
@@ -261,7 +277,13 @@ export function createMonitor(
 }
 
 export function startMonitor(client: Client) {
-  const monitor = createMonitor(client, getStore());
+  const monitor = createMonitor(
+    client,
+    getStore(),
+    getListings,
+    Date.now,
+    getCleanup(client),
+  );
   const cronExpr = getTaskRunner(client).cron;
   const job = Bun.cron(cronExpr, () => monitor.check());
   const initialCheck = setTimeout(() => void monitor.check(), 5000);
