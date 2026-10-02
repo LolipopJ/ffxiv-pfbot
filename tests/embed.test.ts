@@ -14,7 +14,7 @@ afterEach(() => mock.restore());
 test("long party fields hide optional jobs while preserving occupied and vacant slots", () => {
   const slots: Slot[] = [
     { filled: true, role: ["tank"], acceptedJobs: ["PLD"] },
-    ...Array.from({ length: 7 }, () => ({
+    ...Array.from({ length: 39 }, () => ({
       filled: false,
       role: ["dps"] as Slot["role"],
       acceptedJobs: Array.from(
@@ -26,8 +26,8 @@ test("long party fields hide optional jobs while preserving occupied and vacant 
   const result = buildPartyField(slots);
   expect(result).toContain("骑士");
   expect(result).not.toContain("JOB");
-  expect(result.split(" | ")).toHaveLength(8);
-  expect(result.match(/⬜️/g)).toHaveLength(7);
+  expect(result.split(" | ")).toHaveLength(40);
+  expect(result.match(/⬜️/g)).toHaveLength(39);
   expect(result.length).toBeLessThanOrEqual(1024);
 });
 

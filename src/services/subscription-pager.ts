@@ -13,10 +13,11 @@ import { getCommandContext } from "../utils/channel";
 import { logger } from "../utils/logger";
 import { displaySubscriptionFilters } from "../utils/subscription";
 import { displayPattern, truncate } from "../utils/text";
+import { formatCleanupResult, getCleanup } from "./cleanup";
 import { type ChannelScope, getStore, SubscriptionStore } from "./store";
 import { runSubscriptionForm } from "./subscription-form";
 
-type PagerMode = "list" | "unsubscribe" | "edit";
+type PagerMode = "list" | "unsubscribe" | "edit" | "reset";
 
 export function isPagerInteraction(
   interaction: MessageComponentInteraction,
@@ -28,7 +29,7 @@ export function isPagerInteraction(
     interaction.user.id === userId &&
     interaction.guildId === scope.guildId &&
     interaction.channelId === scope.channelId &&
-    ["previous", "next", "delete", "edit"].some(
+    ["previous", "next", "delete", "edit", "reset"].some(
       (action) => interaction.customId === `${session}:${action}`,
     )
   );
@@ -44,7 +45,7 @@ export function buildSubscriptionPage(
   const result = store.getSubscriptionsPage(
     scope,
     page,
-    mode === "list" ? 5 : 25,
+    mode === "list" ? 5 : mode === "reset" ? 24 : 25,
   );
   const components: ActionRowBuilder<
     ButtonBuilder | StringSelectMenuBuilder
@@ -60,10 +61,15 @@ export function buildSubscriptionPage(
           `\n\n${result.page * 5 + index + 1}. ${displayPattern(sub.keyword)}\n${displaySubscriptionFilters(sub, 50).replace("\n", " ｜ ")}\nID: ${sub.id} ｜ 创建者: <@${sub.userId}>`,
       )
       .join("");
-  } else if (result.total > 0) {
-    content += `\n选择要${mode === "edit" ? "编辑" : "取消"}的招募订阅：`;
+  } else if (result.total > 0 || mode === "reset") {
+    content +=
+      mode === "reset"
+        ? "\n选择要强制清理的订阅：不检查招募期限，删除关联消息及投递记录，保留订阅配置；仍有效的招募可在下一轮重新推送。多个订阅共享的消息也会删除。"
+        : `\n选择要${mode === "edit" ? "编辑" : "取消"}的招募订阅：`;
     const select = new StringSelectMenuBuilder()
-      .setCustomId(`${session}:${mode === "edit" ? "edit" : "delete"}`)
+      .setCustomId(
+        `${session}:${mode === "reset" ? "reset" : mode === "edit" ? "edit" : "delete"}`,
+      )
       .setPlaceholder("选择本页招募订阅")
       .addOptions(
         result.subscriptions.map((sub) => ({
@@ -75,6 +81,14 @@ export function buildSubscriptionPage(
           value: sub.id,
         })),
       );
+    if (mode === "reset") {
+      select.addOptions({
+        label: "全部订阅",
+        description:
+          "强制清理当前频道的所有招募消息及投递记录（包括已取消订阅的记录）",
+        value: "all",
+      });
+    }
     components.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
     );
@@ -144,16 +158,43 @@ export async function runSubscriptionPager(
     if (
       selection.isStringSelectMenu() &&
       selection.customId ===
-        `${session}:${mode === "edit" ? "edit" : "delete"}` &&
+        `${session}:${mode === "reset" ? "reset" : mode === "edit" ? "edit" : "delete"}` &&
       mode !== "list"
     ) {
       const id = selection.values[0];
-      if (!id || !view.subscriptions.some((sub) => sub.id === id)) {
+      if (
+        !id ||
+        (!(mode === "reset" && id === "all") &&
+          !view.subscriptions.some((sub) => sub.id === id))
+      ) {
         await selection.reply({
           content: "❌️ 未找到该招募订阅或无权操作。",
           flags: MessageFlags.Ephemeral,
         });
         continue;
+      }
+      if (mode === "reset") {
+        if (id !== "all" && !store.getSubscription(context.scope, id)) {
+          await selection.update({
+            content: "❌️ 未找到该招募订阅或无权操作。",
+            components: [],
+          });
+          return;
+        }
+        await selection.deferUpdate();
+        await interaction.editReply({
+          content: "⏳ 正在强制清理…",
+          components: [],
+        });
+        const result = await getCleanup(interaction.client).reset(
+          context.scope,
+          id === "all" ? undefined : id,
+        );
+        await interaction.editReply({
+          content: formatCleanupResult(result),
+          components: [],
+        });
+        return;
       }
       if (mode === "edit") {
         const subscription = store.getSubscription(context.scope, id);

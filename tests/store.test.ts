@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "path";
 
@@ -23,6 +24,83 @@ afterEach(() => {
 });
 
 describe("SQLite subscription scope", () => {
+  test("reset rotates only the selected listing nonce and persists it across restart", () => {
+    const directory = temporaryDirectory();
+    directories.push(directory);
+    const filename = join(directory, "nonces.sqlite");
+    const store = open(filename);
+    for (const scope of [
+      scopeA,
+      scopeB,
+      { ...scopeA, guildId: "other-guild" },
+    ]) {
+      for (const id of ["alpha", "beta"]) {
+        store.saveDelivery(scope, id, {
+          messageId: id,
+          payloadHash: "hash",
+          updatedAt: 0,
+          expiresAt: 1000,
+        });
+      }
+    }
+    expect(store.getDeliveryNonceVersion(scopeA, "alpha")).toBe("");
+    expect(store.getDeliveryNonceVersion(scopeA, "beta")).toBe("");
+    expect(store.removeDelivery(scopeA, "alpha", true)).toBe(true);
+    const alphaNonce = store.getDeliveryNonceVersion(scopeA, "alpha");
+    expect(alphaNonce).not.toBe("");
+    expect(store.removeDelivery(scopeA, "alpha", true)).toBe(false);
+    expect(store.getDeliveryNonceVersion(scopeA, "alpha")).toBe(alphaNonce);
+    store.close();
+    const reopened = open(filename);
+    expect(reopened.getDeliveryNonceVersion(scopeA, "alpha")).toBe(alphaNonce);
+    expect(reopened.getDeliveryNonceVersion(scopeA, "beta")).toBe("");
+    expect(reopened.getDeliveryNonceVersion(scopeB, "alpha")).toBe("");
+    expect(
+      reopened.getDeliveryNonceVersion(
+        { ...scopeA, guildId: "other-guild" },
+        "alpha",
+      ),
+    ).toBe("");
+    // A lost response may have no delivery record yet; resetting Alpha must not change its nonce.
+    expect(reopened.getDeliveryNonceVersion(scopeA, "unrecorded")).toBe("");
+  });
+
+  test("existing databases gain delivery associations without losing records", () => {
+    const directory = temporaryDirectory();
+    directories.push(directory);
+    const filename = join(directory, "legacy.sqlite");
+    const legacy = new Database(filename, { create: true });
+    legacy.run(`CREATE TABLE deliveries (
+      guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, listing_id TEXT NOT NULL,
+      message_id TEXT NOT NULL, payload_hash TEXT NOT NULL, created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+      PRIMARY KEY (guild_id, channel_id, listing_id)
+    ); INSERT INTO deliveries VALUES ('guild-A', 'channel-A', '123', 'message', 'hash', 1, 2, 3);`);
+    legacy.close();
+    const store = open(filename);
+    expect(store.getDelivery(scopeA, "123")?.messageId).toBe("message");
+    expect(store.getDeliverySubscriptionIds(scopeA, "123")).toEqual([]);
+    const sub = store.addSubscription(scopeA, "Ultimate", "user");
+    if (!sub.ok) throw new Error("setup failed");
+    store.setDeliverySubscriptions(scopeA, "123", [sub.sub.id]);
+    store.close();
+    const reopened = open(filename);
+    expect(reopened.getDeliverySubscriptionIds(scopeA, "123")).toEqual([
+      sub.sub.id,
+    ]);
+    expect(reopened.getDeliverySubscriptionIds(scopeB, "123")).toEqual([]);
+    reopened.removeSubscription(scopeA, sub.sub.id);
+    expect(reopened.getDeliverySubscriptionIds(scopeA, "123")).toEqual([
+      sub.sub.id,
+    ]);
+    reopened.removeDelivery(scopeA, "123", true);
+    expect(reopened.getDeliverySubscriptionIds(scopeA, "123")).toEqual([]);
+    const nonce = reopened.getDeliveryNonceVersion(scopeA, "123");
+    expect(nonce).not.toBe("");
+    reopened.close();
+    expect(open(filename).getDeliveryNonceVersion(scopeA, "123")).toBe(nonce);
+  });
+
   test("edits persist while preserving identity, metadata and delivery state", () => {
     const directory = temporaryDirectory();
     directories.push(directory);

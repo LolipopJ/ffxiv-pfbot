@@ -9,8 +9,10 @@ import {
 import { readdirSync } from "fs";
 import { join } from "path";
 
+import { getCleanup } from "./services/cleanup";
 import { startMonitor } from "./services/monitor";
 import { closeStore } from "./services/store";
+import { getTaskRunner } from "./services/tasks";
 import type { Command } from "./types/command";
 import { logger } from "./utils/logger";
 
@@ -126,6 +128,7 @@ client.on(Events.GuildCreate, async (guild) => {
 
 // ─── 4. 启动 ────────────────────────────────────────────────────────
 client.once(Events.ClientReady, async (c) => {
+  getTaskRunner(c);
   logger.info("启动", "机器人已上线", {
     user: c.user.tag,
     commands: client.commands.size,
@@ -139,7 +142,10 @@ client.once(Events.ClientReady, async (c) => {
 
   if (isShuttingDown) return;
   try {
-    if (!isShuttingDown) stopMonitor = startMonitor(c);
+    if (!isShuttingDown) {
+      stopMonitor = startMonitor(c);
+      getCleanup(c).start();
+    }
   } catch (error) {
     logger.error("启动", "初始化数据库或启动监控失败", { error });
     await client.destroy();
@@ -165,8 +171,12 @@ client.login(DISCORD_BOT_TOKEN).catch((e) => {
 const shutdown = async () => {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  logger.info("关闭", "正在关闭机器人，等待监控任务完成");
-  await stopMonitor?.();
+  logger.info("关闭", "正在关闭机器人，等待监控和清理任务完成");
+  await Promise.all([
+    stopMonitor?.(),
+    getCleanup(client).stop(),
+    getTaskRunner(client).stop(),
+  ]);
   await client.destroy();
   closeStore();
   logger.info("关闭", "机器人已关闭");

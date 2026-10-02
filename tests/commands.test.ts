@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
   ChannelType,
   type ChatInputCommandInteraction,
@@ -13,14 +13,23 @@ import {
 } from "discord.js";
 import { join } from "path";
 
+import {
+  data as clearData,
+  execute as clearCommand,
+} from "../src/commands/clear";
 import { data as editData, execute as editCommand } from "../src/commands/edit";
 import { data as listData, execute as listCommand } from "../src/commands/list";
+import {
+  data as resetData,
+  execute as resetCommand,
+} from "../src/commands/reset";
 import {
   data as subscribeData,
   execute as subscribeCommand,
 } from "../src/commands/subscribe";
 import { execute as unsubscribeCommand } from "../src/commands/unsubscribe";
 import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../src/locales/zh-cn";
+import { getCleanup } from "../src/services/cleanup";
 import { closeStore, getStore } from "../src/services/store";
 import {
   buildSubscriptionForm,
@@ -38,6 +47,7 @@ import {
 import {
   allPermissions,
   fakeChannel,
+  fakeClient,
   removeTemporaryDirectory,
   scopeA,
   scopeB,
@@ -58,7 +68,7 @@ afterEach(() => {
 });
 
 interface Action {
-  kind: "next" | "previous" | "delete" | "edit";
+  kind: "next" | "previous" | "delete" | "edit" | "reset";
   id?: string;
   before?: () => void;
   permissions?: PermissionsBitField;
@@ -92,6 +102,7 @@ function interactionFixture(
   let current: View;
   let acknowledged = false;
   const base = {
+    client: fakeClient([channel.channel]),
     guildId: scopeA.guildId,
     channelId: scopeA.channelId,
     channel: channel.channel,
@@ -182,8 +193,9 @@ function interactionFixture(
         memberPermissions: action.permissions ?? allPermissions,
         customId: `${session}:${action.kind}`,
         values: [action.id ?? ""],
-        isButton: () => !["delete", "edit"].includes(action.kind),
-        isStringSelectMenu: () => ["delete", "edit"].includes(action.kind),
+        isButton: () => !["delete", "edit", "reset"].includes(action.kind),
+        isStringSelectMenu: () =>
+          ["delete", "edit", "reset"].includes(action.kind),
         showModal: async (form: ModalBuilder) => {
           if (componentAcknowledged)
             throw new Error("component was already acknowledged");
@@ -242,7 +254,13 @@ function formFields(form: ModalBuilder) {
 }
 
 test("commands collect keyword in the form and have no target channel option", () => {
-  for (const command of [editData, listData, subscribeData]) {
+  for (const command of [
+    editData,
+    listData,
+    subscribeData,
+    clearData,
+    resetData,
+  ]) {
     expect(
       command
         .toJSON()
@@ -769,4 +787,130 @@ test("pager sessions bind component actions to user, guild, channel and session"
   expect(isPagerInteraction(interaction, "user", scopeA, "other-session")).toBe(
     false,
   );
+});
+
+test("clear dispatches the current scope privately and requires management permissions", async () => {
+  for (const allowed of [true, false]) {
+    const fixture = interactionFixture();
+    if (!allowed)
+      Object.assign(fixture.interaction, {
+        memberPermissions: new PermissionsBitField(0n),
+      });
+    const clear = spyOn(
+      getCleanup(fixture.interaction.client),
+      "clear",
+    ).mockResolvedValue({
+      removed: 3,
+      failed: 1,
+      unlinked: 0,
+      fetchFailed: true,
+    });
+    try {
+      await clearCommand(fixture.interaction);
+      expect(fixture.deferred[0]?.flags).toBe(MessageFlags.Ephemeral);
+      if (allowed) {
+        expect(clear).toHaveBeenCalledWith(scopeA);
+        expect(fixture.views.at(-1)?.content).toContain("已清理 3");
+        expect(fixture.views.at(-1)?.content).toContain("失败 1");
+        expect(fixture.views.at(-1)?.content).toContain("抓取失败");
+      } else expect(clear).not.toHaveBeenCalled();
+    } finally {
+      clear.mockRestore();
+    }
+  }
+});
+
+test("reset paginates 24 subscriptions plus all and selects a later page", async () => {
+  for (let i = 0; i < 25; i++)
+    getStore().addSubscription(scopeA, `pattern-${i}`, "user");
+  for (const page of [0, 1]) {
+    const view = buildSubscriptionPage(
+      getStore(),
+      scopeA,
+      page,
+      "reset",
+      "session",
+    );
+    const select = view.payload.components[0]!.toJSON().components[0]!;
+    if (select.type !== ComponentType.StringSelect)
+      throw new Error("expected select");
+    expect(select.options).toHaveLength(page === 0 ? 25 : 2);
+    expect(select.options.at(-1)?.value).toBe("all");
+  }
+  const sub = getStore().getSubscriptionsPage(scopeA, 1, 24).subscriptions[0]!;
+  getStore().saveDelivery(
+    scopeA,
+    "123",
+    {
+      messageId: "target",
+      payloadHash: "hash",
+      updatedAt: 0,
+      expiresAt: Date.now() + 3_600_000,
+    },
+    [sub.id],
+  );
+  const fixture = interactionFixture({
+    actions: [{ kind: "next" }, { kind: "reset", id: sub.id }],
+  });
+  await resetCommand(fixture.interaction);
+  expect(fixture.views[1]?.content).toContain("第 2/2 页");
+  expect(fixture.deletes).toEqual(["target"]);
+  expect(getStore().getSubscriptions(scopeA)).toHaveLength(25);
+  expect(fixture.views.at(-1)?.content).toContain("已清理 1");
+  expect(fixture.views.at(-1)?.components).toEqual([]);
+});
+
+test("reset all remains available without subscriptions and clears only the current channel", async () => {
+  for (const scope of [scopeA, scopeB])
+    getStore().saveDelivery(scope, "123", {
+      messageId: scope.channelId,
+      payloadHash: "hash",
+      updatedAt: 0,
+      expiresAt: Date.now() + 3_600_000,
+    });
+  const fixture = interactionFixture({
+    actions: [{ kind: "reset", id: "all" }],
+  });
+  await resetCommand(fixture.interaction);
+  expect(fixture.deferred[0]?.flags).toBe(MessageFlags.Ephemeral);
+  expect(fixture.deletes).toEqual([scopeA.channelId]);
+  expect(getStore().getChannelDeliveries(scopeA)).toHaveLength(0);
+  expect(getStore().getChannelDeliveries(scopeB)).toHaveLength(1);
+});
+
+test("reset rejects foreign or off-page IDs, revoked permissions, stale selections and timed-out sessions", async () => {
+  for (let i = 0; i < 25; i++)
+    getStore().addSubscription(scopeA, `pattern-${i}`, "user");
+  const own = getStore().getSubscriptions(scopeA)[0]!;
+  const offPage = getStore().getSubscriptionsPage(scopeA, 1, 24)
+    .subscriptions[0]!;
+  const foreign = getStore().addSubscription(scopeB, "SECRET", "user");
+  if (!foreign.ok) throw new Error("setup failed");
+  getStore().saveDelivery(
+    scopeA,
+    "123",
+    { messageId: "keep", payloadHash: "hash", updatedAt: 0, expiresAt: 0 },
+    [own.id],
+  );
+  for (const actions of [
+    [{ kind: "reset", id: foreign.sub.id }],
+    [{ kind: "reset", id: offPage.id }],
+    [{ kind: "reset", id: "all", permissions: new PermissionsBitField(0n) }],
+    [],
+    [
+      {
+        kind: "reset",
+        id: own.id,
+        before: () => {
+          getStore().removeSubscription(scopeA, own.id);
+        },
+      },
+    ],
+  ] satisfies Action[][]) {
+    const fixture = interactionFixture({ actions });
+    await resetCommand(fixture.interaction);
+    expect(fixture.deletes).toEqual([]);
+    expect(getStore().getDelivery(scopeA, "123")).not.toBeNull();
+    expect(fixture.views.at(-1)?.components).toEqual([]);
+  }
 });

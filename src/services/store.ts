@@ -105,6 +105,7 @@ export class SubscriptionStore {
       PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
+      PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS subscriptions (
         id TEXT PRIMARY KEY,
         guild_id TEXT NOT NULL,
@@ -128,6 +129,15 @@ export class SubscriptionStore {
         PRIMARY KEY (guild_id, channel_id, listing_id)
       );
       CREATE INDEX IF NOT EXISTS deliveries_listing_id ON deliveries (listing_id);
+      CREATE TABLE IF NOT EXISTS delivery_subscriptions (
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        listing_id TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        PRIMARY KEY (guild_id, channel_id, listing_id, subscription_id),
+        FOREIGN KEY (guild_id, channel_id, listing_id)
+          REFERENCES deliveries (guild_id, channel_id, listing_id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS expired_listings (
         listing_id TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL,
@@ -355,6 +365,53 @@ export class SubscriptionStore {
       .all();
   }
 
+  getChannelDeliveries(scope: ChannelScope): MonitorDelivery[] {
+    validateScope(scope);
+    return this.db
+      .query<MonitorDelivery, [string, string]>(
+        `
+      SELECT guild_id AS guildId, channel_id AS channelId, listing_id AS listingId,
+        message_id AS messageId, payload_hash AS payloadHash,
+        created_at AS createdAt, updated_at AS updatedAt, expires_at AS expiresAt
+      FROM deliveries WHERE guild_id = ? AND channel_id = ? ORDER BY listing_id
+    `,
+      )
+      .all(scope.guildId, scope.channelId);
+  }
+
+  getDeliverySubscriptionIds(scope: ChannelScope, listingId: string): string[] {
+    validateScope(scope);
+    return this.db
+      .query<{ id: string }, [string, string, string]>(
+        `
+      SELECT subscription_id AS id FROM delivery_subscriptions
+      WHERE guild_id = ? AND channel_id = ? AND listing_id = ? ORDER BY subscription_id
+    `,
+      )
+      .all(scope.guildId, scope.channelId, listingId)
+      .map((row) => row.id);
+  }
+
+  setDeliverySubscriptions(
+    scope: ChannelScope,
+    listingId: string,
+    ids: string[],
+  ) {
+    validateScope(scope);
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `DELETE FROM delivery_subscriptions
+        WHERE guild_id = ? AND channel_id = ? AND listing_id = ?`,
+        )
+        .run(scope.guildId, scope.channelId, listingId);
+      const insert = this.db.query(`INSERT OR IGNORE INTO delivery_subscriptions
+        (guild_id, channel_id, listing_id, subscription_id) VALUES (?, ?, ?, ?)`);
+      for (const id of ids)
+        insert.run(scope.guildId, scope.channelId, listingId, id);
+    })();
+  }
+
   getExpiredListingIds(): string[] {
     return this.getExpiredListings().map((listing) => listing.listingId);
   }
@@ -378,15 +435,41 @@ export class SubscriptionStore {
       .run(listingId);
   }
 
-  removeDelivery(scope: ChannelScope, listingId: string) {
+  getDeliveryNonceVersion(scope: ChannelScope, listingId: string): string {
     validateScope(scope);
     return (
       this.db
-        .query(
-          `DELETE FROM deliveries WHERE guild_id = ? AND channel_id = ? AND listing_id = ?`,
+        .query<{ value: string }, [string]>(
+          "SELECT value FROM metadata WHERE key = ?",
         )
-        .run(scope.guildId, scope.channelId, listingId).changes > 0
+        .get(`delivery_nonce:${scope.guildId}:${scope.channelId}:${listingId}`)
+        ?.value ?? ""
     );
+  }
+
+  removeDelivery(scope: ChannelScope, listingId: string, force = false) {
+    validateScope(scope);
+    return this.db.transaction(() => {
+      const removed =
+        this.db
+          .query(
+            `DELETE FROM deliveries WHERE guild_id = ? AND channel_id = ? AND listing_id = ?`,
+          )
+          .run(scope.guildId, scope.channelId, listingId).changes > 0;
+      // Reset must invalidate Discord's recent nonce cache so a deleted message can be resent.
+      if (removed && force) {
+        this.db
+          .query(
+            `INSERT INTO metadata (key, value) VALUES (?, ?)
+          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+          )
+          .run(
+            `delivery_nonce:${scope.guildId}:${scope.channelId}:${listingId}`,
+            randomUUID(),
+          );
+      }
+      return removed;
+    })();
   }
 
   // Website observations update every channel, independently of Discord operations.
@@ -408,11 +491,13 @@ export class SubscriptionStore {
     scope: ChannelScope,
     listingId: string,
     delivery: Omit<Delivery, "createdAt">,
+    subscriptionIds?: string[],
   ) {
     validateScope(scope);
-    this.db
-      .query(
-        `
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `
       INSERT INTO deliveries
         (guild_id, channel_id, listing_id, message_id, payload_hash, created_at, updated_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -420,17 +505,20 @@ export class SubscriptionStore {
         message_id = excluded.message_id, payload_hash = excluded.payload_hash,
         updated_at = excluded.updated_at, expires_at = excluded.expires_at
     `,
-      )
-      .run(
-        scope.guildId,
-        scope.channelId,
-        listingId,
-        delivery.messageId,
-        delivery.payloadHash,
-        delivery.updatedAt,
-        delivery.updatedAt,
-        delivery.expiresAt,
-      );
+        )
+        .run(
+          scope.guildId,
+          scope.channelId,
+          listingId,
+          delivery.messageId,
+          delivery.payloadHash,
+          delivery.updatedAt,
+          delivery.updatedAt,
+          delivery.expiresAt,
+        );
+      if (subscriptionIds !== undefined)
+        this.setDeliverySubscriptions(scope, listingId, subscriptionIds);
+    })();
   }
 
   close() {
