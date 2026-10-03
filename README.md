@@ -13,7 +13,7 @@
 
 ## 部署指南
 
-运行环境需能正常访问 Discord 和 xivpf.com，并安装 Git。选择直接运行时需 **Bun 1.4.2 或更高版本**；支持选择使用 Docker Compose 部署。
+运行环境需能正常访问 Discord 和 xivpf.com。选择直接运行时需 **Bun 1.4.2 或更高版本**；支持选择使用 Docker Compose 部署。
 
 ### 创建机器人并配置权限
 
@@ -204,6 +204,12 @@ bun run typecheck   # TypeScript 类型检查
 bun run test        # 自动化测试
 ```
 
+翻译词典来自 `ffxiv-data` Git 子模块，运行时使用已构建的词典。更新游戏数据并重新生成：
+
+```bash
+bun run build:dict
+```
+
 ### 实现结构
 
 项目使用 discord.js 处理命令和消息，Cheerio 解析页面，RE2JS 校验和执行正则，`bun:sqlite` 保存状态。文件树结构如下：
@@ -252,10 +258,3 @@ SQLite 保存订阅、推送记录、订阅与消息的关联及过期标记，�
 - **修改筛选或展示**：筛选项和标签见 `src/locales/zh-cn.ts`，消息格式见 `src/utils/embed.ts`；保持表单校验、监控筛选及 Discord 消息长度限制一致。
 - **适配网站变化**：修改 `fetcher.ts`，验证正常列表、空列表及异常页面。请求超时为 30 秒，解压后的 HTML 上限为 16 MiB；非 HTML、缺少列表容器或招募 ID 均视为失败。
 - **查看日志**：格式为 `[UTC 时间] [级别] [模块] 消息`，附带频道、招募或消息 ID 等上下文，涵盖启动、订阅变更、抓取、投递和清理结果。
-
-翻译词典来自 `ffxiv-data` Git 子模块，运行时使用已提交的词典。更新游戏数据并重新生成：
-
-```bash
-git submodule update --init --remote --depth 1
-bun run build:dict
-```
