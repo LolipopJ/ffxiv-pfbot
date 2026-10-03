@@ -15,25 +15,6 @@ export const DATA_CENTRE_LABEL = {
   Materia: "Materia (OC)",
 };
 
-export const CATEGORY_LABEL: Record<Category, string> = {
-  DutyRoulette: "随机任务",
-  Dungeons: "迷宫挑战",
-  Guildhests: "行会令",
-  Trials: "讨伐歼灭战",
-  Raids: "大型任务",
-  HighEndDuty: "高难度任务",
-  Pvp: "对战",
-  GoldSaucer: "金碟游乐场",
-  Fates: "危命任务",
-  TreasureHunt: "寻宝",
-  TheHunt: "怪物狩猎",
-  GatheringForays: "采集活动",
-  DeepDungeons: "深层迷宫",
-  AdventuringForays: "特殊场景探索",
-  None: "其他",
-  "V&C Dungeon Finder": "特殊迷宫探索",
-};
-
 export const JOB_LABEL: Record<Job, string> = {
   PLD: "骑士",
   GLA: "剑术师",
@@ -70,10 +51,39 @@ export const JOB_LABEL: Record<Job, string> = {
   ANY: "所有人",
 };
 
+export const CATEGORY_LABEL: Record<Category, string> = {
+  DutyRoulette: "随机任务",
+  Dungeons: "迷宫挑战",
+  Guildhests: "行会令",
+  Trials: "讨伐歼灭战",
+  Raids: "大型任务",
+  HighEndDuty: "高难度任务",
+  Pvp: "对战",
+  GoldSaucer: "金碟游乐场",
+  Fates: "危命任务",
+  TreasureHunt: "寻宝",
+  TheHunt: "怪物狩猎",
+  GatheringForays: "采集活动",
+  DeepDungeons: "深层迷宫",
+  AdventuringForays: "特殊场景探索",
+  None: "其他",
+  "V&C Dungeon Finder": "特殊迷宫探索",
+};
+
+export const RECRUITMENT_TAG_LABEL: Record<string, string> = {
+  None: "无",
+  "Duty Completion": "完成任务",
+  Practice: "练习",
+  Loot: "反复攻略",
+  "Duty Complete": "任务已完成",
+  "One Player per Job": "职业不重复",
+};
+
 export { DICT };
 export default {
   DICT,
   DATA_CENTRE_LABEL,
-  CATEGORY_LABEL,
   JOB_LABEL,
+  CATEGORY_LABEL,
+  RECRUITMENT_TAG_LABEL,
 };

@@ -100,6 +100,7 @@ export function parseListings(html: string): Recruitment[] {
     const creator = $el.find(".item.creator .text").first().text().trim();
     const world = $el.find(".item.world .text").first().text().trim();
     const expires = $el.find(".item.expires .text").first().text().trim();
+    const updated = $el.find(".item.updated .text").first().text().trim();
     const slots: Slot[] = [];
     $el.find(".party .slot:not(.total)").each((_, slotEl) => {
       slots.push(parseSlot($(slotEl)));
@@ -122,6 +123,7 @@ export function parseListings(html: string): Recruitment[] {
       creator,
       world,
       expires,
+      updated,
       // 将关键字段拼接为单一字符串供正则匹配
       rawText: [duty, description].join(" "),
     });

@@ -123,7 +123,15 @@ test.each(["", "unknown", "in two minutes", "in -1 minutes", "in 2 hours"])(
 );
 
 test.each([
-  ["[Practice] P5 中文", "[Practice] P5 中文"],
+  ["[Practice] P5 中文", "[练习] P5 中文"],
+  [
+    "[Loot][Duty Complete][One Player per Job] 消化  ST、D1〆    ヤーン　3塔後バースト 2から時計90°",
+    "[反复攻略][任务已完成][职业不重复] 消化  ST、D1〆    ヤーン　3塔後バースト 2から時計90°",
+  ],
+  ["[None][Duty Completion] 攻略", "[无][完成任务] 攻略"],
+  ["[Unknown][Loot] 攻略 [Practice]", "[Unknown][反复攻略] 攻略 [Practice]"],
+  ["攻略 [Loot]", "攻略 [Loot]"],
+  ["[toString] 攻略", "[toString] 攻略"],
   ["**bold**", "\\*\\*bold\\*\\*"],
   ["_italic_", "\\_italic\\_"],
   ["__underline__", "\\_\\_underline\\_\\_"],

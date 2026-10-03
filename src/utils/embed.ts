@@ -1,6 +1,11 @@
 import { EmbedBuilder, escapeMarkdown } from "discord.js";
 
-import { CATEGORY_LABEL, DICT, JOB_LABEL } from "../locales/zh-cn";
+import {
+  CATEGORY_LABEL,
+  DICT,
+  JOB_LABEL,
+  RECRUITMENT_TAG_LABEL,
+} from "../locales/zh-cn";
 import type {
   Category,
   Job,
@@ -94,6 +99,16 @@ export function getListingPublishedAt(expires: string, now = Date.now()) {
   return expiresAt === null ? null : expiresAt - LISTING_LIFETIME_MS;
 }
 
+function translateDescriptionTags(description: string) {
+  return description.replace(/^(?:\[[^[\]\r\n]+\])+/, (tags) =>
+    tags.replace(/\[([^[\]\r\n]+)\]/g, (tag, label: string) =>
+      Object.hasOwn(RECRUITMENT_TAG_LABEL, label)
+        ? `[${RECRUITMENT_TAG_LABEL[label]}]`
+        : tag,
+    ),
+  );
+}
+
 function escapedField(text: string) {
   const escaped = escapeMarkdown(text, {
     heading: true,
@@ -118,7 +133,7 @@ export function buildListingEmbed(listing: Recruitment, now = Date.now()) {
     .setFields([
       {
         name: "📃 招募描述",
-        value: escapedField(listing.description),
+        value: escapedField(translateDescriptionTags(listing.description)),
         inline: true,
       },
       {
