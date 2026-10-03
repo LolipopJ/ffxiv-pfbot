@@ -19,6 +19,7 @@ const html = `<div id="listings" class="list">
     <div class="item creator"><span class="text">Test @ Anima</span></div>
     <div class="item world"><span class="text">Anima</span></div>
     <div class="item expires"><span class="text">in an hour</span></div>
+    <div class="item updated"><span class="text">23 minutes ago</span></div>
   </div>
 </div>`;
 
@@ -38,6 +39,7 @@ test("parses the current XIVPF structure into searchable text and party slots", 
       creator: "Test @ Anima",
       world: "Anima",
       expires: "in an hour",
+      updated: "23 minutes ago",
       rawText: "The Omega Protocol (Ultimate) [Practice] P5 delta & sigma",
       slots: [
         { filled: true, role: ["tank"], acceptedJobs: ["PLD"] },

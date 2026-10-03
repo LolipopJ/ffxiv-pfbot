@@ -1,5 +1,5 @@
 import type { Recruitment } from "../types/recruitment";
-import { getListingExpiresAt } from "../utils/listing-time";
+import { getListingExpiresAt, isListingStale } from "../utils/listing-time";
 import { logger } from "../utils/logger";
 import type { SubscriptionStore } from "./store";
 
@@ -13,7 +13,11 @@ export function refreshListingState(
   const listingExpiries = new Map<string, number | null>();
   if (listings) {
     for (const listing of listings.values()) {
-      const expiresAt = getListingExpiresAt(listing.expires, observedAt);
+      // Stale website entries represent full/cancelled recruitments, even if
+      // their advertised countdown has not ended. Persist this for delete retries.
+      const expiresAt = isListingStale(listing.updated)
+        ? observedAt
+        : getListingExpiresAt(listing.expires, observedAt);
       listingExpiries.set(listing.id, expiresAt);
       if (expiresAt === null) {
         logger.warn(

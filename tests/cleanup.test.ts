@@ -231,6 +231,86 @@ test("manual clear cleans only its channel", async () => {
   ]);
 });
 
+test.each([
+  { updated: "now", removed: 0 },
+  { updated: "9 minutes ago", removed: 0 },
+  { updated: "10 minutes ago", removed: 0 },
+  { updated: "11 minutes ago", removed: 1 },
+  { updated: "23 minutes ago", removed: 1 },
+  { updated: "59 minutes ago", removed: 1 },
+  { updated: "an hour ago", removed: 1 },
+  { updated: "", removed: 0 },
+  { updated: "unknown", removed: 0 },
+  { updated: "in 20 minutes", removed: 0 },
+])(
+  "manual cleanup treats $updated as stale only after ten minutes and respects channel scope",
+  async ({ updated, removed }) => {
+    const { store, a, b, fetcher, monitor, cleanup } = setup();
+    store.addSubscription(scopeA, "Ultimate", "user");
+    store.addSubscription(scopeB, "Ultimate", "user");
+    await monitor.check();
+    fetcher.mockResolvedValue([listing({ updated })]);
+    expect(await cleanup.clear(scopeA)).toMatchObject({ removed, failed: 0 });
+    expect(a.deletes).toEqual(removed ? ["message-1"] : []);
+    expect(b.deletes).toEqual([]);
+    expect(store.getChannelDeliveries(scopeA)).toHaveLength(1 - removed);
+    expect(store.getChannelDeliveries(scopeB)).toHaveLength(1);
+    expect(store.getMonitorSubscriptions()).toHaveLength(2);
+  },
+);
+
+test.each([false, true])(
+  "monitor cleanup suppresses stale entries until the website updates them (previous delivery: %s)",
+  async (previousDelivery) => {
+    const { store, a, fetcher, monitor } = setup();
+    store.addSubscription(scopeA, "Ultimate", "user");
+    if (previousDelivery) await monitor.check();
+    fetcher.mockResolvedValue([
+      listing({ updated: "23 minutes ago", description: "Changed" }),
+    ]);
+    fetcher.mockClear();
+    await monitor.check();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(a.sends).toHaveLength(previousDelivery ? 1 : 0);
+    expect(a.edits).toHaveLength(0);
+    expect(a.deletes).toEqual(previousDelivery ? ["message-1"] : []);
+    expect(store.getMonitorDeliveries()).toEqual([]);
+    await monitor.check();
+    expect(a.sends).toHaveLength(previousDelivery ? 1 : 0);
+    expect(a.edits).toHaveLength(0);
+    fetcher.mockResolvedValue([listing({ updated: "now" })]);
+    await monitor.check();
+    expect(a.sends).toHaveLength(previousDelivery ? 2 : 1);
+    expect(store.getMonitorDeliveries()).toHaveLength(1);
+    expect(store.getExpiredListingIds()).toEqual([]);
+  },
+);
+
+test("stale cleanup failures remain retryable when the next website fetch fails", async () => {
+  const { store, a, fetcher, monitor, cleanup } = setup();
+  store.addSubscription(scopeA, "Ultimate", "user");
+  await monitor.check();
+  fetcher.mockResolvedValue([
+    listing({ updated: "11 minutes ago", expires: "unknown" }),
+  ]);
+  a.control.deleteError = Object.assign(new Error("forbidden"), {
+    code: 50013,
+  });
+  expect(await cleanup.clear(scopeA)).toMatchObject({ removed: 0, failed: 1 });
+  expect(store.getMonitorDeliveries()).toHaveLength(1);
+  expect(store.getExpiredListingIds()).toEqual(["123"]);
+  a.control.deleteError = undefined;
+  fetcher.mockRejectedValue(new Error("offline"));
+  expect(await cleanup.clear(scopeA)).toMatchObject({
+    removed: 1,
+    failed: 0,
+    fetchFailed: true,
+  });
+  expect(a.deletes).toEqual(["message-1"]);
+  expect(store.getMonitorDeliveries()).toEqual([]);
+  expect(store.getSubscriptions(scopeA)).toHaveLength(1);
+});
+
 test("targeted reset ignores expiry and the website, handles shared messages and preserves other scopes", async () => {
   const { store, a, b, fetcher, monitor, cleanup, states } = setup();
   const first = store.addSubscription(scopeA, "Ultimate", "user");

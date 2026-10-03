@@ -57,6 +57,7 @@ export function listing(overrides: Partial<Recruitment> = {}): Recruitment {
     creator: "Test @ World",
     world: "World",
     expires: "in an hour",
+    updated: "now",
     rawText: "Ultimate Practice",
     ...overrides,
   };

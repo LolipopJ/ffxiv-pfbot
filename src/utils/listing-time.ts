@@ -1,4 +1,11 @@
 export const LISTING_LIFETIME_MS = 3_600_000;
+export const LISTING_STALE_AFTER_MINUTES = 10;
+
+export function isListingStale(updated: string) {
+  if (updated === "an hour ago") return true;
+  const match = /^(\d+) minutes ago$/.exec(updated);
+  return match !== null && Number(match[1]) >= LISTING_STALE_AFTER_MINUTES;
+}
 
 export function getListingExpiresAt(expires: string, now = Date.now()) {
   if (expires.trim().toLowerCase() === "now") return now;
