@@ -233,8 +233,13 @@ test("manual clear cleans only its channel", async () => {
 
 test.each([
   { updated: "now", removed: 0 },
+  { updated: "a second ago", removed: 0 },
+  { updated: "1 second ago", removed: 0 },
+  { updated: "12 seconds ago", removed: 0 },
+  { updated: "59 seconds ago", removed: 0 },
+  { updated: "1 minute ago", removed: 0 },
   { updated: "9 minutes ago", removed: 0 },
-  { updated: "10 minutes ago", removed: 0 },
+  { updated: "10 minutes ago", removed: 1 },
   { updated: "11 minutes ago", removed: 1 },
   { updated: "23 minutes ago", removed: 1 },
   { updated: "59 minutes ago", removed: 1 },
@@ -243,7 +248,7 @@ test.each([
   { updated: "unknown", removed: 0 },
   { updated: "in 20 minutes", removed: 0 },
 ])(
-  "manual cleanup treats $updated as stale only after ten minutes and respects channel scope",
+  "manual cleanup treats $updated as stale at ten minutes or more and respects channel scope",
   async ({ updated, removed }) => {
     const { store, a, b, fetcher, monitor, cleanup } = setup();
     store.addSubscription(scopeA, "Ultimate", "user");

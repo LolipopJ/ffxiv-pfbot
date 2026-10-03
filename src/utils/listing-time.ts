@@ -2,7 +2,14 @@ export const LISTING_LIFETIME_MS = 3_600_000;
 export const LISTING_STALE_AFTER_MINUTES = 10;
 
 export function isListingStale(updated: string) {
-  if (updated === "an hour ago") return true;
+  if (
+    updated === "now" ||
+    /^(?:a|\d+) seconds? ago$/.test(updated) ||
+    updated === "a minute ago" ||
+    updated === "1 minute ago"
+  )
+    return false;
+  if (updated === "an hour ago" || updated === "1 hour ago") return true;
   const match = /^(\d+) minutes ago$/.exec(updated);
   return match !== null && Number(match[1]) >= LISTING_STALE_AFTER_MINUTES;
 }

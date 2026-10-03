@@ -11,7 +11,7 @@ export interface Recruitment {
   creator: string; // 招募发起人 (e.g., "Rue Bergamot @ Chocobo")
   world: string; // 服务器 (e.g., "Chocobo")
   expires: string; // 招募剩余时间 (e.g., "in 45 seconds", "in 23 minutes", "in an hour")
-  updated: string; // 上次更新此招募信息的时间 (e.g., "now", "23 minutes ago", "an hour ago")
+  updated: string; // 上次更新此招募信息的时间 (e.g., "now", "12 seconds ago", "23 minutes ago", "an hour ago")
   rawText: string; // 用于正则匹配的拼接文本
 }
 
