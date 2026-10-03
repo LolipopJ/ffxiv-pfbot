@@ -1,0 +1,73 @@
+name: Update FFXIV data
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-ffxiv-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      HUSKY: "0"
+      TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Check for FFXIV data updates
+        id: data
+        shell: bash
+        run: |
+          current_commit="$(git rev-parse HEAD:ffxiv-data)"
+          remote_url="$(git config --file .gitmodules --get submodule.ffxiv-data.url)"
+          remote_branch="$(git config --file .gitmodules --get submodule.ffxiv-data.branch)"
+          remote_commit="$(git ls-remote --exit-code "$remote_url" "refs/heads/$remote_branch" | cut -f1)"
+
+          echo "Current commit: $current_commit"
+          echo "Remote commit: $remote_commit"
+          if [ "$current_commit" = "$remote_commit" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Bun
+        if: steps.data.outputs.changed == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install dependencies
+        if: steps.data.outputs.changed == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Update the submodule and rebuild the dictionary
+        if: steps.data.outputs.changed == 'true'
+        run: bun run build:dict
+
+      - name: Commit and push changes
+        if: steps.data.outputs.changed == 'true'
+        shell: bash
+        run: |
+          git add --all
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update FFXIV data and dictionary"
+          git pull --rebase origin "$TARGET_BRANCH"
+          git push origin "HEAD:$TARGET_BRANCH"
