@@ -9,6 +9,7 @@ import {
   StringSelectMenuBuilder,
 } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import { getCommandContext } from "../utils/channel";
 import { logger } from "../utils/logger";
 import { displaySubscriptionFilters } from "../utils/subscription";
@@ -41,7 +42,9 @@ export function buildSubscriptionPage(
   page: number,
   mode: PagerMode,
   session: string,
+  language: Locale = locale,
 ) {
+  const messages = language.messages.pager;
   const result = store.getSubscriptionsPage(
     scope,
     page,
@@ -52,30 +55,52 @@ export function buildSubscriptionPage(
   >[] = [];
   let content =
     result.total === 0
-      ? "ℹ️ 当前频道没有任何招募订阅。"
-      : `📋 **当前频道招募订阅**（${result.total} 个）｜第 ${result.page + 1}/${result.pageCount} 页`;
+      ? messages.empty
+      : messages.summary({
+          total: result.total,
+          page: result.page + 1,
+          pageCount: result.pageCount,
+        });
   if (mode === "list") {
     content += result.subscriptions
-      .map(
-        (sub, index) =>
-          `\n\n${result.page * 5 + index + 1}. ${displayPattern(sub.keyword)}\n${displaySubscriptionFilters(sub, 50).replace("\n", " ｜ ")}\nID: ${sub.id} ｜ 创建者: <@${sub.userId}>`,
-      )
+      .map((sub, index) => {
+        const pattern = Array.from(sub.keyword.replace(/\s+/g, " "));
+        return messages.item({
+          index: result.page * 5 + index + 1,
+          pattern: displayPattern(
+            pattern.slice(0, 50).join("") + (pattern.length > 50 ? "..." : ""),
+          ),
+          filters: displaySubscriptionFilters(sub, 50, language).replace(
+            "\n",
+            " ｜ ",
+          ),
+          id: sub.id,
+          userId: sub.userId,
+        });
+      })
       .join("");
   } else if (result.total > 0 || mode === "reset") {
     content +=
       mode === "reset"
-        ? "\n选择要强制清理的订阅：不检查招募期限，删除关联消息及投递记录，保留订阅配置；仍有效的招募可在下一轮重新推送。多个订阅共享的消息也会删除。"
-        : `\n选择要${mode === "edit" ? "编辑" : "取消"}的招募订阅：`;
+        ? messages.selectReset
+        : mode === "edit"
+          ? messages.selectEdit
+          : messages.selectDelete;
     const select = new StringSelectMenuBuilder()
       .setCustomId(
         `${session}:${mode === "reset" ? "reset" : mode === "edit" ? "edit" : "delete"}`,
       )
-      .setPlaceholder("选择本页招募订阅")
+      .setPlaceholder(truncate(messages.placeholder, 150))
       .addOptions(
         result.subscriptions.map((sub) => ({
-          label: truncate(sub.keyword.replace(/\s+/g, " "), 90) || "（空正则）",
+          label:
+            truncate(sub.keyword.replace(/\s+/g, " "), 90) ||
+            messages.emptyPattern,
           description: truncate(
-            displaySubscriptionFilters(sub).replace("\n", " ｜ "),
+            displaySubscriptionFilters(sub, Infinity, language).replace(
+              "\n",
+              " ｜ ",
+            ),
             100,
           ),
           value: sub.id,
@@ -83,9 +108,8 @@ export function buildSubscriptionPage(
       );
     if (mode === "reset") {
       select.addOptions({
-        label: "全部订阅",
-        description:
-          "强制清理当前频道的所有招募消息及投递记录（包括已取消订阅的记录）",
+        label: truncate(messages.all, 100),
+        description: truncate(messages.allDescription, 100),
         value: "all",
       });
     }
@@ -98,12 +122,12 @@ export function buildSubscriptionPage(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`${session}:previous`)
-          .setLabel("上一页")
+          .setLabel(truncate(messages.previous, 80))
           .setStyle(ButtonStyle.Secondary)
           .setDisabled(result.page === 0),
         new ButtonBuilder()
           .setCustomId(`${session}:next`)
-          .setLabel("下一页")
+          .setLabel(truncate(messages.next, 80))
           .setStyle(ButtonStyle.Secondary)
           .setDisabled(result.page === result.pageCount - 1),
       ),
@@ -111,16 +135,22 @@ export function buildSubscriptionPage(
   }
   return {
     ...result,
-    payload: { content, components, allowedMentions: { parse: [] as never[] } },
+    payload: {
+      content: truncate(content, 2000),
+      components,
+      allowedMentions: { parse: [] as never[] },
+    },
   };
 }
 
 export async function runSubscriptionPager(
   interaction: ChatInputCommandInteraction,
   mode: PagerMode,
+  language: Locale = locale,
 ) {
+  const messages = language.messages.pager;
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const context = getCommandContext(interaction);
+  const context = getCommandContext(interaction, language);
   if (!context.ok) {
     await interaction.editReply({ content: context.reason });
     return;
@@ -128,7 +158,14 @@ export async function runSubscriptionPager(
   const store = getStore();
   const session = randomUUID();
   let page = (interaction.options.getInteger("page") ?? 1) - 1;
-  let view = buildSubscriptionPage(store, context.scope, page, mode, session);
+  let view = buildSubscriptionPage(
+    store,
+    context.scope,
+    page,
+    mode,
+    session,
+    language,
+  );
   const reply = await interaction.editReply(view.payload);
   const deadline = Date.now() + 120_000;
   while (view.payload.components.length > 0 && Date.now() < deadline) {
@@ -147,7 +184,7 @@ export async function runSubscriptionPager(
     } catch {
       break;
     }
-    const currentContext = getCommandContext(selection);
+    const currentContext = getCommandContext(selection, language);
     if (!currentContext.ok) {
       await selection.update({
         content: currentContext.reason,
@@ -168,7 +205,7 @@ export async function runSubscriptionPager(
           !view.subscriptions.some((sub) => sub.id === id))
       ) {
         await selection.reply({
-          content: "❌️ 未找到该招募订阅或无权操作。",
+          content: `❌️ ${language.messages.errors.SUBSCRIPTION_NOT_FOUND}`,
           flags: MessageFlags.Ephemeral,
         });
         continue;
@@ -176,14 +213,14 @@ export async function runSubscriptionPager(
       if (mode === "reset") {
         if (id !== "all" && !store.getSubscription(context.scope, id)) {
           await selection.update({
-            content: "❌️ 未找到该招募订阅或无权操作。",
+            content: `❌️ ${language.messages.errors.SUBSCRIPTION_NOT_FOUND}`,
             components: [],
           });
           return;
         }
         await selection.deferUpdate();
         await interaction.editReply({
-          content: "⏳ 正在强制清理…",
+          content: messages.resetting,
           components: [],
         });
         const result = await getCleanup(interaction.client).reset(
@@ -191,7 +228,7 @@ export async function runSubscriptionPager(
           id === "all" ? undefined : id,
         );
         await interaction.editReply({
-          content: formatCleanupResult(result),
+          content: formatCleanupResult(result, language),
           components: [],
         });
         return;
@@ -200,22 +237,26 @@ export async function runSubscriptionPager(
         const subscription = store.getSubscription(context.scope, id);
         if (!subscription) {
           await selection.update({
-            content: "❌️ 未找到该招募订阅或无权操作。",
+            content: `❌️ ${language.messages.errors.SUBSCRIPTION_NOT_FOUND}`,
             components: [],
           });
           return;
         }
-        await runSubscriptionForm(selection, subscription, () =>
-          interaction.editReply({
-            content: "ℹ️ 请在弹窗中修改正则、数据中心和招募类别，提交后保存。",
-            components: [],
-          }),
+        await runSubscriptionForm(
+          selection,
+          subscription,
+          () =>
+            interaction.editReply({
+              content: messages.editOpened,
+              components: [],
+            }),
+          language,
         );
         return;
       }
       const removed = store.removeSubscription(context.scope, id);
       if (removed) {
-        logger.info("订阅", "已取消招募订阅", {
+        logger.info("subscription", "subscriptionCancelled", {
           ...context.scope,
           subscriptionId: id,
           userId: interaction.user.id,
@@ -223,8 +264,8 @@ export async function runSubscriptionPager(
       }
       await selection.update({
         content: removed
-          ? "✅ 已取消该招募订阅。"
-          : "❌️ 未找到该招募订阅或无权操作。",
+          ? messages.cancelled
+          : `❌️ ${language.messages.errors.SUBSCRIPTION_NOT_FOUND}`,
         components: [],
       });
       return;
@@ -234,7 +275,14 @@ export async function runSubscriptionPager(
       continue;
     }
     page = view.page + (selection.customId === `${session}:next` ? 1 : -1);
-    view = buildSubscriptionPage(store, context.scope, page, mode, session);
+    view = buildSubscriptionPage(
+      store,
+      context.scope,
+      page,
+      mode,
+      session,
+      language,
+    );
     await selection.update(view.payload);
   }
   await interaction.editReply({ components: [] });

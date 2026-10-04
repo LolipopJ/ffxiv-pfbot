@@ -10,6 +10,7 @@ services:
       FETCH_CRON: "${FETCH_CRON:-*/5 * * * *}"
       XIVPF_URL: "${XIVPF_URL:-https://xivpf.com/listings}"
       TZ: "${TZ:-UTC}"
+      LANGUAGE: "${LANGUAGE:-EN}"
       DATABASE_PATH: /app/data/pfbot.sqlite
     volumes:
       - pfbot-data:/app/data

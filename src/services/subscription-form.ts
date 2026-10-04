@@ -11,12 +11,13 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../locales/zh-cn";
+import { DATA_CENTRE_LABEL } from "../constants/recruitment";
+import { type Locale, locale } from "../locales";
 import type { Category } from "../types/recruitment";
 import { getBotSendError, getCommandContext } from "../utils/channel";
 import { logger } from "../utils/logger";
 import { displaySubscriptionFilters } from "../utils/subscription";
-import { displayPattern } from "../utils/text";
+import { displayPattern, truncate } from "../utils/text";
 import {
   type ChannelScope,
   getKeywordError,
@@ -41,7 +42,9 @@ export function isSubscriptionInteraction(
 export function buildSubscriptionForm(
   session: string,
   subscription?: Subscription,
+  language: Locale = locale,
 ) {
+  const messages = language.messages.form;
   const keyword = new TextInputBuilder()
     .setCustomId("keyword")
     .setStyle(TextInputStyle.Paragraph)
@@ -53,22 +56,22 @@ export function buildSubscriptionForm(
   const select = (
     customId: string,
     label: string,
-    labels: Record<string, string>,
+    labels: Readonly<Record<string, string>>,
     selected: string[] = [],
   ) =>
     new LabelBuilder()
-      .setLabel(label)
-      .setDescription("可多选，留空表示不限")
+      .setLabel(truncate(label, 45))
+      .setDescription(truncate(messages.multiSelect, 100))
       .setStringSelectMenuComponent(
         new StringSelectMenuBuilder()
           .setCustomId(customId)
-          .setPlaceholder("不限")
+          .setPlaceholder(language.messages.common.unlimited)
           .setRequired(false)
           .setMinValues(0)
           .setMaxValues(Object.keys(labels).length)
           .addOptions(
             Object.entries(labels).map(([value, label]) => ({
-              label,
+              label: truncate(label, 100),
               value,
               default: selected.includes(value),
             })),
@@ -76,24 +79,24 @@ export function buildSubscriptionForm(
       );
   return new ModalBuilder()
     .setCustomId(`${session}:subscription`)
-    .setTitle(subscription ? "编辑招募订阅" : "创建招募订阅")
+    .setTitle(
+      truncate(subscription ? messages.editTitle : messages.createTitle, 45),
+    )
     .addLabelComponents(
       new LabelBuilder()
-        .setLabel("正则表达式")
-        .setDescription(
-          "匹配招募英文标题和招募描述，使用 RE2 语法，长度 1–1000 字符",
-        )
+        .setLabel(truncate(messages.pattern, 45))
+        .setDescription(truncate(messages.patternDescription, 100))
         .setTextInputComponent(keyword),
       select(
         "data-centres",
-        "数据中心",
+        messages.dataCentres,
         DATA_CENTRE_LABEL,
         subscription?.dataCentres,
       ),
       select(
         "categories",
-        "招募类别",
-        CATEGORY_LABEL,
+        messages.categories,
+        language.categories,
         subscription?.categories,
       ),
     );
@@ -103,8 +106,10 @@ export async function runSubscriptionForm(
   interaction: ChatInputCommandInteraction | MessageComponentInteraction,
   subscription?: Subscription,
   onOpened?: () => Promise<unknown>,
+  language: Locale = locale,
 ) {
-  const context = getCommandContext(interaction);
+  const messages = language.messages.form;
+  const context = getCommandContext(interaction, language);
   if (!context.ok) {
     await interaction.reply({
       content: context.reason,
@@ -113,7 +118,9 @@ export async function runSubscriptionForm(
     return;
   }
   const session = randomUUID();
-  await interaction.showModal(buildSubscriptionForm(session, subscription));
+  await interaction.showModal(
+    buildSubscriptionForm(session, subscription, language),
+  );
   const pendingSubmit = interaction
     .awaitModalSubmit({
       filter: (candidate) =>
@@ -130,15 +137,13 @@ export async function runSubscriptionForm(
   const submitted = await pendingSubmit;
   if (!submitted) {
     await interaction.followUp({
-      content: subscription
-        ? "ℹ️ 招募订阅编辑已超时，未修改订阅。"
-        : "ℹ️ 招募订阅设置已超时，未创建订阅。",
+      content: subscription ? messages.editTimeout : messages.createTimeout,
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
   await submitted.deferReply({ flags: MessageFlags.Ephemeral });
-  const currentContext = getCommandContext(submitted);
+  const currentContext = getCommandContext(submitted, language);
   if (!currentContext.ok) {
     await submitted.editReply({ content: currentContext.reason });
     return;
@@ -146,7 +151,9 @@ export async function runSubscriptionForm(
   const keyword = submitted.fields.getTextInputValue("keyword");
   const keywordError = getKeywordError(keyword);
   if (keywordError) {
-    await submitted.editReply({ content: `❌ ${keywordError}` });
+    await submitted.editReply({
+      content: `❌ ${language.messages.errors[keywordError]}`,
+    });
     return;
   }
   const filters = {
@@ -155,7 +162,10 @@ export async function runSubscriptionForm(
       ...submitted.fields.getStringSelectValues("categories"),
     ] as Category[],
   };
-  const permissionError = await getBotSendError(currentContext.channel);
+  const permissionError = await getBotSendError(
+    currentContext.channel,
+    language,
+  );
   if (permissionError) {
     await submitted.editReply({ content: `❌ ${permissionError}` });
     return;
@@ -170,19 +180,30 @@ export async function runSubscriptionForm(
         filters,
       );
   if (result.ok) {
-    logger.info("订阅", subscription ? "已修改招募订阅" : "已创建招募订阅", {
-      ...context.scope,
-      subscriptionId: result.sub.id,
-      userId: interaction.user.id,
-      keyword,
-      dataCentres: result.sub.dataCentres,
-      categories: result.sub.categories,
-    });
+    logger.info(
+      "subscription",
+      subscription ? "subscriptionEdited" : "subscriptionCreated",
+      {
+        ...context.scope,
+        subscriptionId: result.sub.id,
+        userId: interaction.user.id,
+        keyword,
+        dataCentres: result.sub.dataCentres,
+        categories: result.sub.categories,
+      },
+    );
   }
   await submitted.editReply({
     content: result.ok
-      ? `✅ 成功在当前频道${subscription ? "修改" : "创建"}招募订阅。\n匹配正则: ${displayPattern(keyword, 1000)}\n${displaySubscriptionFilters(result.sub)}\nID: ${result.sub.id}`
-      : `❌ ${result.reason}`,
+      ? truncate(
+          (subscription ? messages.edited : messages.created)({
+            pattern: displayPattern(keyword, 1000),
+            filters: displaySubscriptionFilters(result.sub, 300, language),
+            id: result.sub.id,
+          }),
+          2000,
+        )
+      : `❌ ${language.messages.errors[result.errorCode]}`,
     allowedMentions: { parse: [] },
   });
 }

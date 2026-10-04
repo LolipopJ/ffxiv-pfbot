@@ -1,12 +1,15 @@
 import { ActivityType, type Client } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import { logger } from "../utils/logger";
+import { truncate } from "../utils/text";
 
 type TaskState = "idle" | "fetching" | "clearing";
 
 export function createTaskRunner(
   client: Client,
   cron = process.env.FETCH_CRON || "*/5 * * * *",
+  language: Locale = locale,
 ) {
   let tail = Promise.resolve();
   let stopped = false;
@@ -16,26 +19,32 @@ export function createTaskRunner(
       let name = "";
       switch (state) {
         case "fetching":
-          name = "获取并处理招募信息中...";
+          name = language.messages.presence.fetching;
           break;
         case "clearing":
-          name = "清理过期的招募信息中...";
+          name = language.messages.presence.clearing;
           break;
         case "idle":
         default:
-          name = `下次执行：${Bun.cron.parse(cron, Date.now())?.toLocaleString("zh-CN", { hour12: false }) ?? "无匹配时间"}`;
+          name = language.messages.presence.next({
+            time:
+              Bun.cron
+                .parse(cron, Date.now())
+                ?.toLocaleString(language.intlLocale, { hour12: false }) ??
+              language.messages.presence.noNextTime,
+          });
       }
       client.user?.setPresence({
         status: "online",
         activities: [
           {
-            name,
+            name: truncate(name, 128),
             type: ActivityType.Playing,
           },
         ],
       });
     } catch (error) {
-      logger.warn("状态", "更新机器人状态失败", { error });
+      logger.warn("presence", "presenceFailed", { error });
     }
   };
   show("idle");
@@ -43,7 +52,10 @@ export function createTaskRunner(
   return {
     cron,
     run<T>(state: TaskState, task: () => Promise<T>): Promise<T> {
-      if (stopped) return Promise.reject(new Error("机器人正在关闭"));
+      if (stopped)
+        return Promise.reject(
+          new Error(language.messages.logs.errors.botShuttingDown),
+        );
       const result = tail.then(async () => {
         show(state);
         try {
@@ -68,10 +80,10 @@ export function createTaskRunner(
 
 const runners = new WeakMap<Client, ReturnType<typeof createTaskRunner>>();
 
-export function getTaskRunner(client: Client) {
+export function getTaskRunner(client: Client, language: Locale = locale) {
   let runner = runners.get(client);
   if (!runner) {
-    runner = createTaskRunner(client);
+    runner = createTaskRunner(client, undefined, language);
     runners.set(client, runner);
   }
   return runner;

@@ -9,6 +9,8 @@ import {
 import { readdirSync } from "fs";
 import { join } from "path";
 
+import { locale } from "./locales";
+import { LANGUAGES, resolveLanguage } from "./locales/utils/config";
 import { getCleanup } from "./services/cleanup";
 import { startMonitor } from "./services/monitor";
 import { closeStore } from "./services/store";
@@ -17,8 +19,16 @@ import type { Command } from "./types/command";
 import { logger } from "./utils/logger";
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+resolveLanguage(process.env.LANGUAGE, () =>
+  logger.warn("language", "unsupportedLanguage", {
+    value: process.env.LANGUAGE,
+    fallback: "EN",
+    supported: LANGUAGES,
+  }),
+);
+logger.info("startup", "languageConfigured", { language: locale.language });
 if (!DISCORD_BOT_TOKEN) {
-  logger.error("启动", "缺少 DISCORD_BOT_TOKEN，请检查环境变量或 .env 文件");
+  logger.error("startup", "missingToken");
   process.exit(1);
 }
 
@@ -45,14 +55,14 @@ for (const commandFile of commandFiles) {
     const command = await import(filePath);
     if ("data" in command && "execute" in command) {
       client.commands.set(command.data.name, command);
-      logger.info("命令", "命令已加载", { command: command.data.name });
+      logger.info("commands", "commandLoaded", { command: command.data.name });
     } else {
-      logger.error("命令", "命令加载失败，缺少 data 或 execute 属性", {
+      logger.error("commands", "commandInvalid", {
         filePath,
       });
     }
   } catch (e) {
-    logger.error("命令", "命令加载失败", { filePath, error: e });
+    logger.error("commands", "commandLoadFailed", { filePath, error: e });
   }
 }
 
@@ -62,7 +72,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   const command = client.commands.get(interaction.commandName);
   if (!command) {
-    logger.warn("命令", "未找到请求的命令", {
+    logger.warn("commands", "commandNotFound", {
       command: interaction.commandName,
       guildId: interaction.guildId,
       channelId: interaction.channelId,
@@ -73,7 +83,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     await command.execute(interaction);
   } catch (e) {
-    logger.error("命令", "命令执行失败", {
+    logger.error("commands", "commandFailed", {
       command: interaction.commandName,
       guildId: interaction.guildId,
       channelId: interaction.channelId,
@@ -81,7 +91,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       error: e,
     });
     const reply = {
-      content: "❌ 命令执行出错",
+      content: locale.messages.errors.commandFailed,
       flags: MessageFlags.Ephemeral as const,
     };
     try {
@@ -91,7 +101,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply(reply);
       }
     } catch (error) {
-      logger.error("命令", "发送命令错误提示失败", {
+      logger.error("commands", "commandErrorReplyFailed", {
         command: interaction.commandName,
         error,
       });
@@ -104,13 +114,13 @@ const registerCommands = async (guild: Guild) => {
   const commands = Array.from(client.commands.values()).map((cmd) => cmd.data);
   try {
     await guild.commands.set(commands);
-    logger.info("命令", "服务器命令注册完成", {
+    logger.info("commands", "commandsRegistered", {
       guildId: guild.id,
       guildName: guild.name,
       commands: commands.length,
     });
   } catch (e) {
-    logger.error("命令", "服务器命令注册失败", {
+    logger.error("commands", "commandsRegisterFailed", {
       guildId: guild.id,
       guildName: guild.name,
       error: e,
@@ -119,7 +129,7 @@ const registerCommands = async (guild: Guild) => {
 };
 
 client.on(Events.GuildCreate, async (guild) => {
-  logger.info("连接", "机器人已加入服务器", {
+  logger.info("connection", "guildJoined", {
     guildId: guild.id,
     guildName: guild.name,
   });
@@ -129,7 +139,7 @@ client.on(Events.GuildCreate, async (guild) => {
 // ─── 4. 启动 ────────────────────────────────────────────────────────
 client.once(Events.ClientReady, async (c) => {
   getTaskRunner(c);
-  logger.info("启动", "机器人已上线", {
+  logger.info("startup", "botReady", {
     user: c.user.tag,
     commands: client.commands.size,
     guilds: c.guilds.cache.size,
@@ -147,7 +157,7 @@ client.once(Events.ClientReady, async (c) => {
       getCleanup(c).start();
     }
   } catch (error) {
-    logger.error("启动", "初始化数据库或启动监控失败", { error });
+    logger.error("startup", "initializationFailed", { error });
     await client.destroy();
     closeStore();
     process.exit(1);
@@ -155,15 +165,15 @@ client.once(Events.ClientReady, async (c) => {
 });
 
 client.on(Events.Error, (error) =>
-  logger.error("连接", "Discord 客户端错误", { error }),
+  logger.error("connection", "clientError", { error }),
 );
 client.on(Events.Warn, (message) =>
-  logger.warn("连接", "Discord 客户端警告", { reason: message }),
+  logger.warn("connection", "clientWarning", { reason: message }),
 );
 
-logger.info("启动", "正在连接 Discord");
+logger.info("startup", "connecting");
 client.login(DISCORD_BOT_TOKEN).catch((e) => {
-  logger.error("启动", "Discord 登录失败", { error: e });
+  logger.error("startup", "loginFailed", { error: e });
   process.exit(1);
 });
 
@@ -171,7 +181,7 @@ client.login(DISCORD_BOT_TOKEN).catch((e) => {
 const shutdown = async () => {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  logger.info("关闭", "正在关闭机器人，等待监控和清理任务完成");
+  logger.info("shutdown", "shuttingDown");
   await Promise.all([
     stopMonitor?.(),
     getCleanup(client).stop(),
@@ -179,7 +189,7 @@ const shutdown = async () => {
   ]);
   await client.destroy();
   closeStore();
-  logger.info("关闭", "机器人已关闭");
+  logger.info("shutdown", "shutdownComplete");
   process.exit(0);
 };
 process.on("SIGINT", shutdown);

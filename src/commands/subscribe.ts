@@ -4,13 +4,17 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import { runSubscriptionForm } from "../services/subscription-form";
 
 export const data = new SlashCommandBuilder()
   .setName("subscribe")
-  .setDescription("在当前频道订阅招募推送")
+  .setDescription(locale.messages.commands.subscribe)
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
-export async function execute(interaction: ChatInputCommandInteraction) {
-  await runSubscriptionForm(interaction);
+export async function execute(
+  interaction: ChatInputCommandInteraction,
+  language: Locale = locale,
+) {
+  await runSubscriptionForm(interaction, undefined, undefined, language);
 }

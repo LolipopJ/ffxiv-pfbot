@@ -15,33 +15,40 @@ import { join } from "path";
 
 import {
   data as clearData,
-  execute as clearCommand,
+  execute as clearCommandWithLocale,
 } from "../src/commands/clear";
-import { data as editData, execute as editCommand } from "../src/commands/edit";
-import { data as listData, execute as listCommand } from "../src/commands/list";
+import {
+  data as editData,
+  execute as editCommandWithLocale,
+} from "../src/commands/edit";
+import {
+  data as listData,
+  execute as listCommandWithLocale,
+} from "../src/commands/list";
 import {
   data as resetData,
-  execute as resetCommand,
+  execute as resetCommandWithLocale,
 } from "../src/commands/reset";
 import {
   data as subscribeData,
-  execute as subscribeCommand,
+  execute as subscribeCommandWithLocale,
 } from "../src/commands/subscribe";
-import { execute as unsubscribeCommand } from "../src/commands/unsubscribe";
-import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../src/locales/zh-cn";
+import { execute as unsubscribeCommandWithLocale } from "../src/commands/unsubscribe";
+import { DATA_CENTRE_LABEL } from "../src/constants/recruitment";
+import { LOCALES } from "../src/locales";
 import { getCleanup } from "../src/services/cleanup";
 import { closeStore, getStore } from "../src/services/store";
 import {
-  buildSubscriptionForm,
+  buildSubscriptionForm as buildSubscriptionFormWithLocale,
   isSubscriptionInteraction,
 } from "../src/services/subscription-form";
 import {
-  buildSubscriptionPage,
+  buildSubscriptionPage as buildSubscriptionPageWithLocale,
   isPagerInteraction,
 } from "../src/services/subscription-pager";
 import {
-  getBotSendError,
-  getCommandContext,
+  getBotSendError as getBotSendErrorWithLocale,
+  getCommandContext as getCommandContextWithLocale,
   isNotificationChannel,
 } from "../src/utils/channel";
 import {
@@ -53,6 +60,42 @@ import {
   scopeB,
   temporaryDirectory,
 } from "./helpers";
+
+const CATEGORY_LABEL = LOCALES.CHS.categories;
+const clearCommand = (interaction: ChatInputCommandInteraction) =>
+  clearCommandWithLocale(interaction, LOCALES.CHS);
+const editCommand = (interaction: ChatInputCommandInteraction) =>
+  editCommandWithLocale(interaction, LOCALES.CHS);
+const listCommand = (interaction: ChatInputCommandInteraction) =>
+  listCommandWithLocale(interaction, LOCALES.CHS);
+const resetCommand = (interaction: ChatInputCommandInteraction) =>
+  resetCommandWithLocale(interaction, LOCALES.CHS);
+const subscribeCommand = (interaction: ChatInputCommandInteraction) =>
+  subscribeCommandWithLocale(interaction, LOCALES.CHS);
+const unsubscribeCommand = (interaction: ChatInputCommandInteraction) =>
+  unsubscribeCommandWithLocale(interaction, LOCALES.CHS);
+const buildSubscriptionForm: typeof buildSubscriptionFormWithLocale = (
+  session,
+  subscription,
+  language = LOCALES.CHS,
+) => buildSubscriptionFormWithLocale(session, subscription, language);
+const buildSubscriptionPage: typeof buildSubscriptionPageWithLocale = (
+  store,
+  scope,
+  page,
+  mode,
+  session,
+  language = LOCALES.CHS,
+) =>
+  buildSubscriptionPageWithLocale(store, scope, page, mode, session, language);
+const getBotSendError: typeof getBotSendErrorWithLocale = (
+  channel,
+  language = LOCALES.CHS,
+) => getBotSendErrorWithLocale(channel, language);
+const getCommandContext: typeof getCommandContextWithLocale = (
+  interaction,
+  language = LOCALES.CHS,
+) => getCommandContextWithLocale(interaction, language);
 
 let directory: string;
 const previousDatabasePath = process.env.DATABASE_PATH;
@@ -323,8 +366,50 @@ test("subscribe saves all submitted fields together and replies privately", asyn
     categories: ["HighEndDuty", "Trials"],
   });
   expect(getStore().getSubscriptions(scopeB)).toEqual([]);
-  expect(fixture.views.at(-1)?.content).toContain("成功在当前频道创建招募订阅");
+  expect(fixture.views.at(-1)?.content).toContain("已在当前频道创建招募订阅");
 });
+
+test.each(Object.values(LOCALES))(
+  "$language command workflows use selected text and persist original filter IDs",
+  async (language) => {
+    const fixture = interactionFixture({
+      submission: {
+        keyword: "(?i)Ultimate",
+        dataCentres: ["Mana"],
+        categories: ["HighEndDuty"],
+      },
+    });
+    await subscribeCommandWithLocale(fixture.interaction, language);
+    const saved = getStore().getSubscriptions(scopeA)[0]!;
+    expect(saved).toMatchObject({
+      keyword: "(?i)Ultimate",
+      dataCentres: ["Mana"],
+      categories: ["HighEndDuty"],
+    });
+    expect(fixture.views.at(-1)?.content).toBe(
+      language.messages.form.created({
+        pattern: "(?i)Ultimate",
+        filters: language.messages.filters({
+          centres: "Mana (JP)",
+          categories: language.categories.HighEndDuty,
+        }),
+        id: saved.id,
+      }),
+    );
+    const invalid = interactionFixture({ submission: { keyword: "[" } });
+    await subscribeCommandWithLocale(invalid.interaction, language);
+    expect(invalid.views.at(-1)?.content).toBe(
+      `❌ ${language.messages.errors.INVALID_PATTERN}`,
+    );
+    const cancelled = interactionFixture({
+      actions: [{ kind: "delete", id: saved.id }],
+    });
+    await unsubscribeCommandWithLocale(cancelled.interaction, language);
+    expect(cancelled.views.at(-1)?.content).toBe(
+      language.messages.pager.cancelled,
+    );
+  },
+);
 
 test("subscribe allows unrestricted filters and closing or timeout never creates a subscription", async () => {
   const fixture = interactionFixture();
@@ -457,7 +542,7 @@ test("edit prepopulates every field and allows keyword changes within the same f
     },
   ]);
   expect(fixture.views[1]?.components).toEqual([]);
-  expect(fixture.views.at(-1)?.content).toContain("成功在当前频道修改招募订阅");
+  expect(fixture.views.at(-1)?.content).toContain("已更新当前频道的招募订阅");
   expect(
     fixture.deferred.every((reply) => reply.flags === MessageFlags.Ephemeral),
   ).toBe(true);
@@ -548,7 +633,7 @@ test("edit rejects invalid or duplicate submitted conditions without changing da
       submission,
     });
     await editCommand(fixture.interaction);
-    expect(fixture.views.at(-1)?.content).toMatch(/无效|已有相同/);
+    expect(fixture.views.at(-1)?.content).toMatch(/无效|已有.*相同/);
     expect(getStore().getSubscription(scopeA, original.sub.id)).toEqual(
       original.sub,
     );

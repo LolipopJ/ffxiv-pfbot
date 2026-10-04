@@ -1,5 +1,6 @@
 import type { Client } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import type { Recruitment } from "../types/recruitment";
 import { isNotificationChannel } from "../utils/channel";
 import { hasDiscordCode } from "../utils/discord-error";
@@ -28,13 +29,15 @@ export interface CleanupSnapshot {
   fetchFailed: boolean;
 }
 
-export function formatCleanupResult(result: CleanupResult) {
+export function formatCleanupResult(
+  result: CleanupResult,
+  language: Locale = locale,
+) {
+  const messages = language.messages.cleanup;
   return (
-    `${result.failed || result.unlinked || result.fetchFailed ? "⚠️" : "✅"} 已清理 ${result.removed} 条消息及投递记录，失败 ${result.failed} 条（保留记录供重试）。订阅配置已保留。` +
-    (result.fetchFailed ? "\n抓取失败，本次仅按数据库已记录的期限清理。" : "") +
-    (result.unlinked
-      ? `\n另有 ${result.unlinked} 条旧记录尚无订阅关联；可选择「全部订阅」清理。`
-      : "")
+    `${result.failed || result.unlinked || result.fetchFailed ? "⚠️" : "✅"} ${messages.result(result)}` +
+    (result.fetchFailed ? messages.fetchFailed : "") +
+    (result.unlinked ? messages.unlinked({ count: result.unlinked }) : "")
   );
 }
 
@@ -43,12 +46,13 @@ export function createCleanup(
   store: SubscriptionStore,
   fetchListings: () => Promise<Recruitment[]> = getListings,
   now: () => number = Date.now,
+  language: Locale = locale,
 ) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
   let stopped = false;
   let pending = 0;
-  const runner = getTaskRunner(client);
+  const runner = getTaskRunner(client, language);
   const jobs = new Set<Promise<CleanupResult>>();
 
   const cancelTimer = () => {
@@ -60,7 +64,7 @@ export function createCleanup(
     if (!running || pending > 0 || stopped) return;
     timer = setTimeout(() => {
       void clear().catch((error) =>
-        logger.error("清理", "定时清理失败，下次重试", { error }),
+        logger.error("cleanup", "scheduledCleanupFailed", { error }),
       );
     }, CLEANUP_INTERVAL_MS);
   };
@@ -86,7 +90,7 @@ export function createCleanup(
           !isNotificationChannel(channel) ||
           channel.guildId !== scope.guildId
         )
-          throw new Error("频道不可访问或与服务器不匹配");
+          throw new Error(language.messages.logs.errors.channelUnavailable);
         for (const delivery of group) {
           if (!shouldRemove(delivery)) continue;
           try {
@@ -99,7 +103,7 @@ export function createCleanup(
             channel.messages.cache.delete(delivery.messageId);
             store.removeDelivery(delivery, delivery.listingId, force);
             result.removed++;
-            logger.info("清理", "已删除消息及投递记录", {
+            logger.info("cleanup", "deliveryDeleted", {
               guildId: delivery.guildId,
               channelId: delivery.channelId,
               listingId: delivery.listingId,
@@ -108,7 +112,7 @@ export function createCleanup(
             });
           } catch (error) {
             result.failed++;
-            logger.error("清理", "删除失败，保留投递记录等待重试", {
+            logger.error("cleanup", "deleteFailed", {
               listingId: delivery.listingId,
               messageId: delivery.messageId,
               error,
@@ -124,7 +128,7 @@ export function createCleanup(
           }
         } else {
           result.failed += group.filter(shouldRemove).length;
-          logger.error("清理", "频道清理失败，保留记录等待重试", {
+          logger.error("cleanup", "channelCleanupFailed", {
             guildId: scope.guildId,
             channelId: scope.channelId,
             error,
@@ -140,7 +144,10 @@ export function createCleanup(
     subscriptionId?: string,
     snapshot?: CleanupSnapshot,
   ) => {
-    if (stopped) return Promise.reject(new Error("清理服务已停止"));
+    if (stopped)
+      return Promise.reject(
+        new Error(language.messages.logs.errors.cleanupStopped),
+      );
     // Any manual/automatic invocation restarts the one-hour countdown after completion.
     cancelTimer();
     pending++;
@@ -150,7 +157,7 @@ export function createCleanup(
           subscriptionId &&
           (!scope || !store.getSubscription(scope, subscriptionId))
         )
-          throw new Error("未找到该招募订阅或无权操作。");
+          throw new Error(language.messages.errors.SUBSCRIPTION_NOT_FOUND);
         const result: CleanupResult = {
           removed: 0,
           failed: 0,
@@ -170,7 +177,7 @@ export function createCleanup(
             );
           } catch (error) {
             result.fetchFailed = true;
-            logger.error("清理", "抓取失败，仅按数据库期限清理", { error });
+            logger.error("cleanup", "cleanupFetchFailed", { error });
           }
           refreshListingState(store, listings, now());
         }
@@ -206,7 +213,7 @@ export function createCleanup(
           },
           force,
         );
-        logger.info("清理", "清理完成", {
+        logger.info("cleanup", "cleanupComplete", {
           force,
           ...scope,
           subscriptionId,
@@ -235,7 +242,7 @@ export function createCleanup(
       if (stopped || running) return;
       running = true;
       schedule();
-      logger.info("清理", "每小时清理任务已启动", {
+      logger.info("cleanup", "cleanupStarted", {
         intervalMs: CLEANUP_INTERVAL_MS,
       });
     },

@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import type { Element } from "domhandler";
 
+import { locale } from "../locales";
 import type {
   Category,
   Job,
@@ -39,16 +40,19 @@ export async function getListings({
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       },
     });
-    if (!res.ok) throw new Error(`Fetch XIVPF HTTP Error: ${res.status}`);
+    if (!res.ok)
+      throw new Error(
+        locale.messages.logs.errors.fetchHttp({ status: res.status }),
+      );
     if (
       !/^(text\/html|application\/xhtml\+xml)(;|$)/i.test(
         res.headers.get("content-type") || "",
       )
     ) {
-      throw new Error("XIVPF did not return an HTML page");
+      throw new Error(locale.messages.logs.errors.fetchNotHtml);
     }
     reader = res.body?.getReader();
-    if (!reader) throw new Error("XIVPF returned an empty response body");
+    if (!reader) throw new Error(locale.messages.logs.errors.fetchEmptyBody);
     const decoder = new TextDecoder();
     const chunks: string[] = [];
     let bytes = 0;
@@ -57,13 +61,13 @@ export async function getListings({
       if (done) break;
       bytes += value.byteLength;
       if (bytes > MAX_HTML_BYTES) {
-        throw new Error("XIVPF HTML exceeds the 16 MiB response limit");
+        throw new Error(locale.messages.logs.errors.fetchTooLarge);
       }
       chunks.push(decoder.decode(value, { stream: true }));
     }
     chunks.push(decoder.decode());
     const listings = parseListings(chunks.join(""));
-    logger.info("抓取", "招募页面抓取和解析完成", {
+    logger.info("fetcher", "listingsFetched", {
       listings: listings.length,
       htmlKiB: Number((bytes / 1024).toFixed(1)),
       durationMs: Date.now() - startedAt,
@@ -80,7 +84,7 @@ export async function getListings({
 export function parseListings(html: string): Recruitment[] {
   const $ = cheerio.load(html);
   if ($("#listings").length !== 1) {
-    throw new Error("XIVPF listings container is missing or ambiguous");
+    throw new Error(locale.messages.logs.errors.missingListingsContainer);
   }
   const listings: Recruitment[] = [];
 
@@ -88,7 +92,7 @@ export function parseListings(html: string): Recruitment[] {
   $("#listings .listing").each((_, el) => {
     const $el = $(el);
     const id = $el.attr("data-id");
-    if (!id) throw new Error("XIVPF listing is missing its ID");
+    if (!id) throw new Error(locale.messages.logs.errors.missingListingId);
 
     const duty = $el.find(".duty").first().text().trim();
     const description = $el

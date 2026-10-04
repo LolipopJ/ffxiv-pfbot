@@ -20,14 +20,10 @@ export function refreshListingState(
         : getListingExpiresAt(listing.expires, observedAt);
       listingExpiries.set(listing.id, expiresAt);
       if (expiresAt === null) {
-        logger.warn(
-          "招募",
-          "无法解析招募期限，保留已有期限；新投递按观察后 1 小时到期",
-          {
-            listingId: listing.id,
-            expires: listing.expires,
-          },
-        );
+        logger.warn("listing", "expiryUnknown", {
+          listingId: listing.id,
+          expires: listing.expires,
+        });
       }
     }
     for (const id of expiredListingIds) {

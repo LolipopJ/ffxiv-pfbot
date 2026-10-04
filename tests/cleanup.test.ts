@@ -9,12 +9,36 @@ import {
 } from "bun:test";
 import { ActivityType, type PresenceData } from "discord.js";
 
-import { CLEANUP_INTERVAL_MS, createCleanup } from "../src/services/cleanup";
+import { LOCALES } from "../src/locales";
+import {
+  CLEANUP_INTERVAL_MS,
+  createCleanup as createCleanupWithLocale,
+} from "../src/services/cleanup";
 import { createMonitor } from "../src/services/monitor";
 import { SubscriptionStore } from "../src/services/store";
-import { createTaskRunner, getTaskRunner } from "../src/services/tasks";
+import {
+  createTaskRunner as createTaskRunnerWithLocale,
+  getTaskRunner as getTaskRunnerWithLocale,
+} from "../src/services/tasks";
 import { logger } from "../src/utils/logger";
 import { fakeChannel, fakeClient, listing, scopeA, scopeB } from "./helpers";
+
+const createCleanup: typeof createCleanupWithLocale = (
+  client,
+  store,
+  fetcher,
+  now,
+  language = LOCALES.CHS,
+) => createCleanupWithLocale(client, store, fetcher, now, language);
+const createTaskRunner: typeof createTaskRunnerWithLocale = (
+  client,
+  cron,
+  language = LOCALES.CHS,
+) => createTaskRunnerWithLocale(client, cron, language);
+const getTaskRunner: typeof getTaskRunnerWithLocale = (
+  client,
+  language = LOCALES.CHS,
+) => getTaskRunnerWithLocale(client, language);
 
 const stores: SubscriptionStore[] = [];
 const cleanups: ReturnType<typeof createCleanup>[] = [];
@@ -64,9 +88,9 @@ test("each monitor run cleans disappeared messages in all channels using one web
   expect(store.getMonitorDeliveries()).toEqual([]);
   expect(store.getMonitorSubscriptions()).toHaveLength(2);
   expect(states.slice(-4)).toEqual([
-    "获取并处理招募信息中...",
+    "正在获取并处理队员招募信息…",
     expect.stringContaining("下次执行："),
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
 });
@@ -126,7 +150,7 @@ test("an idle or unexpectedly failed monitor still executes cleanup without refe
   const { store, a, fetcher, monitor, states } = setup();
   await monitor.check();
   expect(fetcher).not.toHaveBeenCalled();
-  expect(states.at(-2)).toBe("清理过期的招募信息中...");
+  expect(states.at(-2)).toBe("正在清理已结束的队员招募…");
   store.saveDelivery(scopeA, "expired", {
     messageId: "old-message",
     payloadHash: "old",
@@ -153,13 +177,9 @@ test("cleanup exceptions leave the next monitor run usable", async () => {
   const errors = spyOn(logger, "error");
   await monitor.check();
   expect(store.getMonitorDeliveries()).toHaveLength(1);
-  expect(errors).toHaveBeenCalledWith(
-    "清理",
-    "监控后的自动清理异常，下次清理重试",
-    {
-      error: expect.any(Error),
-    },
-  );
+  expect(errors).toHaveBeenCalledWith("cleanup", "monitorCleanupFailed", {
+    error: expect.any(Error),
+  });
   await monitor.check();
   expect(a.deletes).toEqual(["message-1"]);
   expect(store.getMonitorDeliveries()).toEqual([]);
@@ -200,7 +220,8 @@ test("post-monitor cleanup restarts the hourly fallback countdown", async () => 
   cleanup.start();
   const completed = spyOn(logger, "info");
   const count = () =>
-    completed.mock.calls.filter(([, message]) => message === "清理完成").length;
+    completed.mock.calls.filter(([, message]) => message === "cleanupComplete")
+      .length;
   jest.advanceTimersByTime(CLEANUP_INTERVAL_MS / 2);
   await monitor.check();
   expect(count()).toBe(1);
@@ -224,9 +245,9 @@ test("manual clear cleans only its channel", async () => {
   expect(b.deletes).toEqual([]);
   expect(store.getChannelDeliveries(scopeB)).toHaveLength(1);
   expect(await cleanup.clear()).toMatchObject({ removed: 1, failed: 0 });
-  expect(states).toContain("获取并处理招募信息中...");
+  expect(states).toContain("正在获取并处理队员招募信息…");
   expect(states.slice(-2)).toEqual([
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
 });
@@ -345,7 +366,7 @@ test("targeted reset ignores expiry and the website, handles shared messages and
   expect(store.getSubscriptions(scopeA)).toHaveLength(2);
   expect(store.getExpiredListingIds()).toEqual([]);
   expect(states.slice(-2)).toEqual([
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
 });
@@ -448,7 +469,7 @@ test("monitor and reset serialize so reset deletes an in-flight send and the nex
   await entered.promise;
   const reset = cleanup.reset(scopeA);
   try {
-    expect(states.at(-1)).toBe("获取并处理招募信息中...");
+    expect(states.at(-1)).toBe("正在获取并处理队员招募信息…");
     expect(a.deletes).toEqual([]);
   } finally {
     release.resolve();
@@ -457,11 +478,11 @@ test("monitor and reset serialize so reset deletes an in-flight send and the nex
   expect(await reset).toMatchObject({ removed: 1 });
   expect(store.getChannelDeliveries(scopeA)).toEqual([]);
   expect(states.slice(-6)).toEqual([
-    "获取并处理招募信息中...",
+    "正在获取并处理队员招募信息…",
     expect.stringContaining("下次执行："),
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
   await monitor.check();
@@ -490,7 +511,7 @@ test("a queued monitor keeps the clearing status until cleanup finishes", async 
   try {
     await Promise.resolve();
     expect(states.length).toBe(count);
-    expect(states.at(-1)).toBe("清理过期的招募信息中...");
+    expect(states.at(-1)).toBe("正在清理已结束的队员招募…");
     expect(a.sends).toHaveLength(1);
   } finally {
     release.resolve();
@@ -500,11 +521,11 @@ test("a queued monitor keeps the clearing status until cleanup finishes", async 
   expect(a.deletes).toEqual(["message-1"]);
   expect(a.sends).toHaveLength(2);
   expect(states.slice(-6)).toEqual([
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
-    "获取并处理招募信息中...",
+    "正在获取并处理队员招募信息…",
     expect.stringContaining("下次执行："),
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
 });
@@ -518,14 +539,15 @@ test("hourly cleanup repeats and both manual modes restart the countdown", async
   cleanup.start();
   const completed = spyOn(logger, "info");
   const count = () =>
-    completed.mock.calls.filter(([, message]) => message === "清理完成").length;
+    completed.mock.calls.filter(([, message]) => message === "cleanupComplete")
+      .length;
   jest.advanceTimersByTime(CLEANUP_INTERVAL_MS - 1);
   expect(count()).toBe(0);
   jest.advanceTimersByTime(1);
   await cleanup.idle();
   expect(count()).toBe(1);
   expect(states.slice(-2)).toEqual([
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
   jest.advanceTimersByTime(CLEANUP_INTERVAL_MS);
@@ -608,7 +630,7 @@ test("long and overlapping cleanups suspend the timer until all queued work fini
   try {
     jest.advanceTimersByTime(CLEANUP_INTERVAL_MS * 3);
     expect(states.length).toBe(activeCount);
-    expect(states.at(-1)).toBe("清理过期的招募信息中...");
+    expect(states.at(-1)).toBe("正在清理已结束的队员招募…");
   } finally {
     release.resolve();
     await Promise.all([reset, queued]);
@@ -620,7 +642,7 @@ test("long and overlapping cleanups suspend the timer until all queued work fini
   await cleanup.idle();
   expect(states.length).toBe(count + 2);
   expect(states.slice(-2)).toEqual([
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
 });
@@ -631,7 +653,7 @@ test("failed cleanup restarts the timer and shutdown drains queued tasks", async
   cleanup.start();
   await expect(cleanup.reset(scopeA, "missing")).rejects.toThrow();
   expect(states.slice(-2)).toEqual([
-    "清理过期的招募信息中...",
+    "正在清理已结束的队员招募…",
     expect.stringContaining("下次执行："),
   ]);
   const count = states.length;
@@ -672,19 +694,19 @@ test.each(["fetching", "clearing"] as const)(
       expect(task).toHaveBeenCalledTimes(3);
       await runner.stop();
       await expect(runner.run("fetching", async () => {})).rejects.toThrow(
-        "关闭",
+        LOCALES.CHS.messages.logs.errors.botShuttingDown,
       );
       expect(states.map((state) => state.activities![0]!.name)).toEqual([
         expect.stringContaining("下次执行："),
         failedState === "fetching"
-          ? "获取并处理招募信息中..."
-          : "清理过期的招募信息中...",
+          ? "正在获取并处理队员招募信息…"
+          : "正在清理已结束的队员招募…",
         expect.stringContaining("下次执行："),
         expect.stringContaining("下次执行："),
         expect.stringContaining("下次执行："),
-        "清理过期的招募信息中...",
+        "正在清理已结束的队员招募…",
         expect.stringContaining("下次执行："),
-        "获取并处理招募信息中...",
+        "正在获取并处理队员招募信息…",
         expect.stringContaining("下次执行："),
       ]);
       expect(states.map((state) => state.status)).toEqual([

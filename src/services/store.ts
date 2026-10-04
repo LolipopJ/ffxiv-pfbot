@@ -4,8 +4,10 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { RE2JS } from "re2js";
 
-import { CATEGORY_LABEL, DATA_CENTRE_LABEL } from "../locales/zh-cn";
+import { CATEGORIES, DATA_CENTRE_LABEL } from "../constants/recruitment";
+import { locale } from "../locales";
 import type { Category } from "../types/recruitment";
+import type { SubscriptionErrorCode } from "../types/subscription-error";
 import { logger } from "../utils/logger";
 
 export interface ChannelScope {
@@ -66,32 +68,31 @@ function readSubscription(row: SubscriptionRow): Subscription {
   };
 }
 
-export function getKeywordError(keyword: string) {
-  if (keyword.length === 0 || keyword.length > 1000)
-    return "正则表达式长度必须为 1–1000 字符";
+export function getKeywordError(keyword: string): SubscriptionErrorCode | null {
+  if (keyword.length === 0 || keyword.length > 1000) return "PATTERN_LENGTH";
   try {
     RE2JS.compile(keyword);
     return null;
   } catch {
-    return "无效的 RE2 正则表达式";
+    return "INVALID_PATTERN";
   }
 }
 
 function validateSubscription(keyword: string, filters: SubscriptionFilters) {
   const keywordError = getKeywordError(keyword);
-  if (keywordError) return { ok: false as const, reason: keywordError };
+  if (keywordError) return { ok: false as const, errorCode: keywordError };
   const dataCentres = [...new Set(filters.dataCentres ?? [])].sort();
   const categories = [...new Set(filters.categories ?? [])].sort();
   if (dataCentres.some((value) => !Object.hasOwn(DATA_CENTRE_LABEL, value)))
-    return { ok: false as const, reason: "无效的数据中心" };
-  if (categories.some((value) => !Object.hasOwn(CATEGORY_LABEL, value)))
-    return { ok: false as const, reason: "无效的招募类别" };
+    return { ok: false as const, errorCode: "INVALID_DATA_CENTRE" as const };
+  if (categories.some((value) => !CATEGORIES.includes(value)))
+    return { ok: false as const, errorCode: "INVALID_CATEGORY" as const };
   return { ok: true as const, dataCentres, categories };
 }
 
 function validateScope(scope: ChannelScope) {
   if (!scope.guildId || !scope.channelId)
-    throw new Error("服务器和频道作用域不能为空");
+    throw new Error(locale.messages.logs.errors.scopeRequired);
 }
 
 export class SubscriptionStore {
@@ -190,7 +191,7 @@ export class SubscriptionStore {
       ? { ok: true as const, sub }
       : {
           ok: false as const,
-          reason: "该频道已有相同正则和筛选条件的招募订阅",
+          errorCode: "DUPLICATE_SUBSCRIPTION" as const,
         };
   }
 
@@ -220,7 +221,7 @@ export class SubscriptionStore {
         if (!current)
           return {
             ok: false as const,
-            reason: "未找到该招募订阅或无权操作。",
+            errorCode: "SUBSCRIPTION_NOT_FOUND" as const,
           };
         const validated = validateSubscription(keyword, {
           dataCentres: filters.dataCentres ?? current.dataCentres,
@@ -250,7 +251,7 @@ export class SubscriptionStore {
             }
           : {
               ok: false as const,
-              reason: "该频道已有相同正则和筛选条件的招募订阅",
+              errorCode: "DUPLICATE_SUBSCRIPTION" as const,
             };
       })
       .immediate();
@@ -277,7 +278,7 @@ export class SubscriptionStore {
       pageSize < 1 ||
       pageSize > 25
     ) {
-      throw new Error("无效的分页参数");
+      throw new Error(locale.messages.logs.errors.invalidPagination);
     }
     return this.db.transaction(() => {
       const total = this.db
@@ -534,7 +535,7 @@ export function getStore() {
       process.env.DATABASE_PATH ||
       join(import.meta.dir, "../../data/pfbot.sqlite");
     store = new SubscriptionStore(filename);
-    logger.info("数据库", "订阅数据库已打开", { filename });
+    logger.info("database", "databaseOpened", { filename });
   }
   return store;
 }
@@ -543,5 +544,5 @@ export function closeStore() {
   if (!store) return;
   store?.close();
   store = undefined;
-  logger.info("数据库", "订阅数据库已关闭");
+  logger.info("database", "databaseClosed");
 }

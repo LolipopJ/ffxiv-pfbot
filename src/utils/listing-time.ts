@@ -14,8 +14,9 @@ export function isListingStale(updated: string) {
   return match !== null && Number(match[1]) >= LISTING_STALE_AFTER_MINUTES;
 }
 
-export function getListingExpiresAt(expires: string, now = Date.now()) {
-  if (expires.trim().toLowerCase() === "now") return now;
+export function parseListingExpiry(expires: string) {
+  if (expires.trim().toLowerCase() === "now")
+    return { amount: 0, unit: "second" as const, remaining: 0 };
   const match = /^in\s+(\d+|an?)\s+(seconds?|minutes?|hours?)$/i.exec(
     expires.trim(),
   );
@@ -31,5 +32,19 @@ export function getListingExpiresAt(expires: string, now = Date.now()) {
         : 1000);
   if (!Number.isFinite(remaining) || remaining > LISTING_LIFETIME_MS)
     return null;
-  return now + remaining;
+  const normalizedUnit = unit.startsWith("hour")
+    ? "hour"
+    : unit.startsWith("minute")
+      ? "minute"
+      : "second";
+  return {
+    amount,
+    unit: normalizedUnit as "hour" | "minute" | "second",
+    remaining,
+  };
+}
+
+export function getListingExpiresAt(expires: string, now = Date.now()) {
+  const parsed = parseListingExpiry(expires);
+  return parsed ? now + parsed.remaining : null;
 }

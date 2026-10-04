@@ -1,3 +1,6 @@
+import { type Locale, locale } from "../locales";
+import type { LogEvent, LogModule } from "../types/locale";
+
 type LogContext = Record<string, unknown>;
 
 type LogLevel = "INFO" | "WARN" | "ERROR";
@@ -9,15 +12,17 @@ const LOG_EMOJI: Record<LogLevel, string> = {
 
 function write(
   level: LogLevel,
-  module: string,
-  message: string,
+  language: Locale,
+  module: LogModule,
+  message: LogEvent,
   context: LogContext = {},
 ) {
   const { error, ...details } = context;
   const suffix = Object.keys(details).length
     ? ` ${JSON.stringify(details)}`
     : "";
-  const text = `[${new Date().toISOString()}] [${LOG_EMOJI[level]}] [${module}] ${message}${suffix}`;
+  const logs = language.messages.logs;
+  const text = `[${new Date().toISOString()}] [${LOG_EMOJI[level]}] [${logs.modules[module]}] ${logs.events[message]}${suffix}`;
   const output =
     level === "ERROR"
       ? console.error
@@ -28,11 +33,15 @@ function write(
   else output(text);
 }
 
-export const logger = {
-  info: (module: string, message: string, context?: LogContext) =>
-    write("INFO", module, message, context),
-  warn: (module: string, message: string, context?: LogContext) =>
-    write("WARN", module, message, context),
-  error: (module: string, message: string, context?: LogContext) =>
-    write("ERROR", module, message, context),
-};
+export function createLogger(language: Locale = locale) {
+  return {
+    info: (module: LogModule, message: LogEvent, context?: LogContext) =>
+      write("INFO", language, module, message, context),
+    warn: (module: LogModule, message: LogEvent, context?: LogContext) =>
+      write("WARN", language, module, message, context),
+    error: (module: LogModule, message: LogEvent, context?: LogContext) =>
+      write("ERROR", language, module, message, context),
+  };
+}
+
+export const logger = createLogger();

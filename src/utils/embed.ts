@@ -1,11 +1,13 @@
 import { EmbedBuilder, escapeMarkdown } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import {
-  CATEGORY_LABEL,
-  DICT,
-  JOB_LABEL,
-  RECRUITMENT_TAG_LABEL,
-} from "../locales/zh-cn";
+  formatExpiry,
+  translateCategory,
+  translateDescriptionTags,
+  translateDuty,
+  translateJob,
+} from "../locales/utils/format";
 import type {
   Category,
   Job,
@@ -55,7 +57,7 @@ function getColor(category: Category): number {
   }
 }
 
-export function buildPartyField(slots: Slot[]) {
+export function buildPartyField(slots: Slot[], language: Locale = locale) {
   const render = (hideOptionalJobs: boolean) =>
     slots
       .map((slot) => {
@@ -73,7 +75,7 @@ export function buildPartyField(slots: Slot[]) {
           } else if (filledJob === "BLM") {
             roleEmoji = "🧙‍♂️";
           }
-          return `${roleEmoji}${JOB_LABEL[filledJob] || filledJob}`;
+          return `${roleEmoji}${translateJob(filledJob, language)}`;
         }
         return hideOptionalJobs || slot.acceptedJobs.length === 0
           ? "⬜️"
@@ -99,16 +101,6 @@ export function getListingPublishedAt(expires: string, now = Date.now()) {
   return expiresAt === null ? null : expiresAt - LISTING_LIFETIME_MS;
 }
 
-function translateDescriptionTags(description: string) {
-  return description.replace(/^(?:\[[^[\]\r\n]+\])+/, (tags) =>
-    tags.replace(/\[([^[\]\r\n]+)\]/g, (tag, label: string) =>
-      Object.hasOwn(RECRUITMENT_TAG_LABEL, label)
-        ? `[${RECRUITMENT_TAG_LABEL[label]}]`
-        : tag,
-    ),
-  );
-}
-
 function escapedField(text: string) {
   const escaped = escapeMarkdown(text, {
     heading: true,
@@ -124,34 +116,54 @@ function escapedField(text: string) {
   return (trailingSlashes % 2 ? prefix.slice(0, -1) : prefix) + "…";
 }
 
-export function buildListingEmbed(listing: Recruitment, now = Date.now()) {
+export function buildListingEmbed(
+  listing: Recruitment,
+  now = Date.now(),
+  language: Locale = locale,
+) {
+  const messages = language.messages.embed;
   const embed = new EmbedBuilder()
     .setColor(getColor(listing.category))
-    .setTitle(
-      field(DICT[listing.duty.toLowerCase()] || listing.duty || "Unknown", 256),
-    )
+    .setTitle(field(translateDuty(listing.duty, language), 256))
     .setFields([
       {
-        name: "📃 招募描述",
-        value: escapedField(translateDescriptionTags(listing.description)),
+        name: messages.description,
+        value: escapedField(
+          translateDescriptionTags(listing.description, language),
+        ),
         inline: true,
       },
       {
-        name: "🎯 招募类型",
-        value: field(CATEGORY_LABEL[listing.category], 128),
+        name: messages.category,
+        value: field(translateCategory(listing.category, language), 128),
         inline: true,
       },
       {
-        name: "🌍 服务器",
+        name: messages.server,
         value: field(`${listing.dataCentre} · ${listing.world}`, 128),
         inline: true,
       },
-      { name: "👤 招募人", value: field(listing.creator, 256), inline: true },
-      { name: "⚔️ 最低装等", value: field(listing.minIlvl, 32), inline: true },
-      { name: "⏳ 招募期限", value: field(listing.expires, 128), inline: true },
       {
-        name: `👨‍👩‍👧‍👦 队伍状态 (${Number.isFinite(listing.current) ? listing.current : "?"}/${Number.isFinite(listing.total) ? listing.total : "?"})`,
-        value: buildPartyField(listing.slots),
+        name: messages.creator,
+        value: field(listing.creator, 256),
+        inline: true,
+      },
+      {
+        name: messages.minIlvl,
+        value: field(listing.minIlvl, 32),
+        inline: true,
+      },
+      {
+        name: messages.expires,
+        value: field(formatExpiry(listing.expires, language), 128),
+        inline: true,
+      },
+      {
+        name: messages.party({
+          current: Number.isFinite(listing.current) ? listing.current : "?",
+          total: Number.isFinite(listing.total) ? listing.total : "?",
+        }),
+        value: buildPartyField(listing.slots, language),
         inline: false,
       },
     ]);

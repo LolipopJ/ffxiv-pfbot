@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import type { Client } from "discord.js";
 import { RE2JS } from "re2js";
 
+import { type Locale, locale } from "../locales";
 import type { Recruitment } from "../types/recruitment";
 import { getBotSendError, isNotificationChannel } from "../utils/channel";
 import { hasDiscordCode } from "../utils/discord-error";
@@ -19,8 +20,9 @@ export function buildNotification(
   listing: Recruitment,
   patterns: string[],
   observedAt = Date.now(),
+  language: Locale = locale,
 ) {
-  const embed = buildListingEmbed(listing, observedAt).setFooter({
+  const embed = buildListingEmbed(listing, observedAt, language).setFooter({
     text: field(
       `${patterns.map((pattern) => displayPattern(pattern)).join(", ")}`,
       512,
@@ -47,6 +49,7 @@ export function createMonitor(
   fetchListings: () => Promise<Recruitment[]> = getListings,
   now: () => number = Date.now,
   cleanup = createCleanup(client, store, fetchListings, now),
+  language: Locale = locale,
 ) {
   let inFlight: Promise<void> | undefined;
 
@@ -65,7 +68,7 @@ export function createMonitor(
       store.getMonitorDeliveries().length === 0 &&
       store.getExpiredListingIds().length === 0
     ) {
-      logger.info("监控", "本轮无需检查，没有订阅或投递记录");
+      logger.info("monitor", "monitorSkipped");
       return;
     }
     let listings: Map<string, Recruitment> | undefined;
@@ -78,13 +81,9 @@ export function createMonitor(
     } catch (error) {
       stats.failed++;
       snapshot.fetchFailed = true;
-      logger.error(
-        "监控",
-        "抓取招募失败，下次检查重试；本轮仅按数据库期限清理",
-        {
-          error,
-        },
-      );
+      logger.error("monitor", "monitorFetchFailed", {
+        error,
+      });
     }
     const observedAt = now();
     const { listingExpiries, expiredListingIds, isListingExpired } =
@@ -97,17 +96,13 @@ export function createMonitor(
           !isNotificationChannel(channel) ||
           channel.guildId !== scope.guildId
         ) {
-          logger.warn(
-            "监控",
-            "跳过无法访问或与服务器不匹配的频道，保留记录等待重试",
-            { ...scope },
-          );
+          logger.warn("monitor", "channelUnavailable", { ...scope });
           continue;
         }
         if (store.getSubscriptions(scope).length === 0) continue;
         const permissionError = await getBotSendError(channel);
         if (permissionError) {
-          logger.warn("监控", "频道无法发送消息，跳过本轮投递", {
+          logger.warn("monitor", "channelCannotSend", {
             ...scope,
             reason: permissionError,
           });
@@ -117,7 +112,7 @@ export function createMonitor(
           try {
             return [{ sub, regex: RE2JS.compile(sub.keyword) }];
           } catch {
-            logger.warn("监控", "跳过无效正则订阅", {
+            logger.warn("monitor", "invalidPatternSkipped", {
               ...scope,
               subscriptionId: sub.id,
             });
@@ -146,6 +141,7 @@ export function createMonitor(
               listing,
               [...new Set(patterns)],
               observedAt,
+              language,
             );
             const previous = store.getDelivery(scope, listing.id);
             const expiresAt =
@@ -180,7 +176,7 @@ export function createMonitor(
                   subscriptionIds,
                 );
                 stats.edited++;
-                logger.info("监控", "已更新招募消息", {
+                logger.info("monitor", "listingUpdated", {
                   ...scope,
                   listingId: listing.id,
                   messageId: previous.messageId,
@@ -220,14 +216,14 @@ export function createMonitor(
               subscriptionIds,
             );
             stats.sent++;
-            logger.info("监控", "已发送招募消息", {
+            logger.info("monitor", "listingSent", {
               ...scope,
               listingId: listing.id,
               messageId: message.id,
             });
           } catch (error) {
             stats.failed++;
-            logger.error("监控", "招募投递失败，下次检查重试", {
+            logger.error("monitor", "deliveryFailed", {
               ...scope,
               listingId: listing.id,
               error,
@@ -236,13 +232,13 @@ export function createMonitor(
         }
       } catch (error) {
         stats.failed++;
-        logger.error("监控", "频道处理失败，保留订阅和投递记录等待重试", {
+        logger.error("monitor", "channelProcessingFailed", {
           ...scope,
           error,
         });
       }
     }
-    logger.info("监控", "本轮检查完成", {
+    logger.info("monitor", "monitorComplete", {
       channels: scopes.size,
       listings: listings?.size ?? null,
       expiredListings: expiredListingIds.size,
@@ -258,11 +254,11 @@ export function createMonitor(
       const monitoring = getTaskRunner(client)
         .run("fetching", () => notify(snapshot))
         .catch((error) => {
-          logger.error("监控", "监控任务异常，下次检查重试", { error });
+          logger.error("monitor", "monitorFailed", { error });
         });
       // Queue both phases now so cleanup stays adjacent and shutdown drains both.
       const clearing = cleanup.clearAfterMonitor(snapshot).catch((error) => {
-        logger.error("清理", "监控后的自动清理异常，下次清理重试", { error });
+        logger.error("cleanup", "monitorCleanupFailed", { error });
       });
       return (inFlight = Promise.all([monitoring, clearing])
         .then(() => {})
@@ -287,7 +283,7 @@ export function startMonitor(client: Client) {
   const cronExpr = getTaskRunner(client).cron;
   const job = Bun.cron(cronExpr, () => monitor.check());
   const initialCheck = setTimeout(() => void monitor.check(), 5000);
-  logger.info("监控", "招募监控已启动", {
+  logger.info("monitor", "monitorStarted", {
     cron: cronExpr,
     initialDelayMs: 5000,
   });
@@ -295,6 +291,6 @@ export function startMonitor(client: Client) {
     job.stop();
     clearTimeout(initialCheck);
     await monitor.idle();
-    logger.info("监控", "招募监控已停止");
+    logger.info("monitor", "monitorStopped");
   };
 }

@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 
+import { locale } from "../src/locales";
 import {
   getListings,
   MAX_HTML_BYTES,
@@ -57,19 +58,23 @@ test("parses the current XIVPF structure into searchable text and party slots", 
 test("an empty listing page is valid, unexpected pages and missing IDs fail visibly", () => {
   expect(parseListings('<div id="listings"></div>')).toEqual([]);
   expect(() => parseListings("<html>Access denied</html>")).toThrow(
-    "container",
+    locale.messages.logs.errors.missingListingsContainer,
   );
-  expect(() => parseListings(html.replace('data-id="123"', ""))).toThrow("ID");
+  expect(() => parseListings(html.replace('data-id="123"', ""))).toThrow(
+    locale.messages.logs.errors.missingListingId,
+  );
 });
 
 test("fetches HTML successfully without accepting non-HTML or HTTP errors", async () => {
   spyOn(console, "log").mockImplementation(() => {});
-  const fetchPage = mock(
-    async () =>
-      new Response(html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      }),
-  );
+  const fetchPage = mock(async (_url: string, options: RequestInit) => {
+    expect(options.headers).toMatchObject({
+      "Accept-Language": "en-US,en;q=0.9",
+    });
+    return new Response(html, {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  });
   expect(await getListings({ fetchPage })).toHaveLength(1);
   await expect(
     getListings({
@@ -81,7 +86,7 @@ test("fetches HTML successfully without accepting non-HTML or HTTP errors", asyn
       fetchPage: async () =>
         new Response("{}", { headers: { "Content-Type": "application/json" } }),
     }),
-  ).rejects.toThrow("HTML page");
+  ).rejects.toThrow(locale.messages.logs.errors.fetchNotHtml);
 });
 
 test("the timeout also aborts a stalled response body and a later fetch can recover", async () => {

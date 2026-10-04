@@ -1,13 +1,30 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 
-import { buildNotification } from "../src/services/monitor";
+import { LOCALES } from "../src/locales";
+import { buildNotification as buildNotificationWithLocale } from "../src/services/monitor";
 import type { Slot } from "../src/types/recruitment";
 import {
-  buildListingEmbed,
-  buildPartyField,
+  buildListingEmbed as buildListingEmbedWithLocale,
+  buildPartyField as buildPartyFieldWithLocale,
   getListingPublishedAt,
 } from "../src/utils/embed";
 import { listing } from "./helpers";
+
+const buildListingEmbed: typeof buildListingEmbedWithLocale = (
+  listing,
+  now,
+  language = LOCALES.CHS,
+) => buildListingEmbedWithLocale(listing, now, language);
+const buildPartyField: typeof buildPartyFieldWithLocale = (
+  slots,
+  language = LOCALES.CHS,
+) => buildPartyFieldWithLocale(slots, language);
+const buildNotification: typeof buildNotificationWithLocale = (
+  listing,
+  patterns,
+  now,
+  language = LOCALES.CHS,
+) => buildNotificationWithLocale(listing, patterns, now, language);
 
 afterEach(() => mock.restore());
 
@@ -36,7 +53,7 @@ test("short party fields retain selectable jobs", () => {
     buildPartyField([
       { filled: false, role: ["dps"], acceptedJobs: ["MNK", "SAM"] },
     ]),
-  ).toBe("❓️MNK, SAM");
+  ).toBe("❓️武僧, 武士");
 });
 
 test("all embed fields and aggregate content stay inside Discord limits", () => {

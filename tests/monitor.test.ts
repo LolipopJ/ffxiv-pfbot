@@ -6,6 +6,7 @@ import {
 } from "discord.js";
 import { join } from "path";
 
+import { LOCALES } from "../src/locales";
 import { createMonitor } from "../src/services/monitor";
 import {
   type SubscriptionFilters,
@@ -31,6 +32,47 @@ function setup(filename = ":memory:", filters: SubscriptionFilters = {}) {
   store.addSubscription(scopeA, "Ultimate", "user", filters);
   return { store, ...channel, fetcher, client: fakeClient([channel.channel]) };
 }
+
+test("changing language edits the original message while filters continue matching English source", async () => {
+  const context = setup();
+  const recruitment = listing({
+    duty: "The Omega Protocol (Ultimate)",
+    rawText: "The Omega Protocol (Ultimate) Practice",
+  });
+  context.fetcher.mockResolvedValue([recruitment]);
+  const now = () => 1_800_000_000_000;
+  const english = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    now,
+    undefined,
+    LOCALES.EN,
+  );
+  await english.check();
+  expect(context.sends).toHaveLength(1);
+  const original = context.store.getDelivery(scopeA, recruitment.id)!;
+  const chinese = createMonitor(
+    context.client,
+    context.store,
+    context.fetcher,
+    now,
+    undefined,
+    LOCALES.CHS,
+  );
+  await chinese.check();
+  expect(context.sends).toHaveLength(1);
+  expect(context.edits).toHaveLength(1);
+  expect(context.edits[0]!.id).toBe(original.messageId);
+  const payload = context.edits[0]!.payload as { embeds: EmbedBuilder[] };
+  expect(payload.embeds[0]!.toJSON().title).toBe("欧米茄绝境验证战");
+  expect(
+    context.store.getDelivery(scopeA, recruitment.id)!.payloadHash,
+  ).not.toBe(original.payloadHash);
+  await chinese.check();
+  expect(context.edits).toHaveLength(1);
+  expect(recruitment.rawText).toBe("The Omega Protocol (Ultimate) Practice");
+});
 afterEach(() => {
   mock.restore();
   for (const store of stores.splice(0)) store.close();

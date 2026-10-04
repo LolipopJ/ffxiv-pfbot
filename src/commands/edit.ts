@@ -4,16 +4,23 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import { runSubscriptionPager } from "../services/subscription-pager";
 
 export const data = new SlashCommandBuilder()
   .setName("edit")
-  .setDescription("分页选择并编辑当前频道的招募订阅")
+  .setDescription(locale.messages.commands.edit)
   .addIntegerOption((option) =>
-    option.setName("page").setDescription("页码，默认第 1 页").setMinValue(1),
+    option
+      .setName("page")
+      .setDescription(locale.messages.commands.page)
+      .setMinValue(1),
   )
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
-export async function execute(interaction: ChatInputCommandInteraction) {
-  await runSubscriptionPager(interaction, "edit");
+export async function execute(
+  interaction: ChatInputCommandInteraction,
+  language: Locale = locale,
+) {
+  await runSubscriptionPager(interaction, "edit", language);
 }

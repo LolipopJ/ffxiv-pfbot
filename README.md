@@ -1,34 +1,36 @@
 # ffxiv-pfbot
 
+English | [简体中文](./docs/README-chs.md)
+
 <div align="center">
-  <img src="./docs/preview.png" alt="Discord 招募推送预览" height="320" />
+  <img src="./docs/preview.png" alt="Discord Party Finder notification preview" height="320" />
 </div>
 
-面向《最终幻想 XIV》（FF14）国际服玩家的 Discord 招募订阅机器人。定时读取 [xivpf.com](https://xivpf.com/listings) 的招募信息，按关键词、数据中心和招募类别筛选，推送到指定频道。
+A Discord bot for subscribing to Party Finder listings on the international servers of **FINAL FANTASY XIV** (FFXIV). It periodically reads listings from [xivpf.com](https://xivpf.com/listings), filters them by keywords, data center, and recruitment category, and sends them to the specified channels.
 
-- **按频道订阅**：通过斜杠命令和表单管理，支持正则表达式及多选筛选。
-- **中文招募卡片**：显示副本、招募描述、服务器、招募人、装等和队伍职业；副本名称优先使用中文译名，描述正文保留原文。
-- **自动维护消息**：同一频道内去重，内容变化时更新原消息，招募结束后自动清理。
-- **本地持久化**：使用 Bun 内置的 SQLite，无需额外数据库服务，重启后保留订阅和推送记录。
+- **Channel subscriptions**: Manage subscriptions through slash commands and forms, with regular expressions and multiple filter selections.
+- **Multilingual output and logs**: Support English, Simplified Chinese, German, French, Japanese, or Korean for listing cards, commands, forms, replies, status, and internal log messages.
+- **Automatic message maintenance**: Deduplicate listings within each channel, update existing messages when content changes, and remove messages when recruitment ends.
+- **Local persistence**: Bun's built-in SQLite stores subscriptions and delivery records across restarts, with no separate database service required.
 
-## 部署指南
+## Deployment
 
-运行环境需能正常访问 Discord 和 xivpf.com。选择直接运行时需 **Bun 1.4.2 或更高版本**；支持选择使用 Docker Compose 部署。
+The runtime must be able to access Discord and xivpf.com. Running directly requires **Bun 1.4.2 or later**. Docker Compose deployment is also supported.
 
-### 创建机器人并配置权限
+### Create the bot and configure permissions
 
-在 Discord Developer Portal 创建应用和机器人，取得 Bot Token。邀请机器人进入服务器时，选择 `bot` 和 `applications.commands` scopes，并在接收推送的频道授予以下权限：
+Create an application and a bot in the Discord Developer Portal, then obtain its Bot Token. When inviting the bot to your server, select the `bot` and `applications.commands` scopes. Grant the following permissions in channels that will receive notifications:
 
-| 使用场景           | 机器人所需权限                   |
-| ------------------ | -------------------------------- |
-| 文字频道、公告频道 | 查看频道、发送消息、嵌入链接     |
-| 线程               | 查看频道、发送线程消息、嵌入链接 |
+| Channel type                 | Required bot permissions                            |
+| ---------------------------- | --------------------------------------------------- |
+| Text or announcement channel | View Channel, Send Messages, Embed Links            |
+| Thread                       | View Channel, Send Messages in Threads, Embed Links |
 
-私密线程还需将机器人加入线程，或授予管理线程权限；线程不能处于归档或锁定状态。向公告频道发送消息不会自动发布到关注者频道。
+For private threads, also add the bot to the thread or grant Manage Threads. Threads must be neither archived nor locked. Messages sent to an announcement channel are not automatically published to follower channels.
 
-机器人无需管理员、管理频道或管理消息权限，仅使用 `Guilds` intent，无需开启 Message Content 或 Guild Members 特权 intent。
+The bot does not need Administrator, Manage Channels, or Manage Messages. It uses only the `Guilds` intent; the privileged Message Content and Guild Members intents are not required.
 
-### 配置项目
+### Configure the project
 
 ```bash
 git clone https://github.com/LolipopJ/ffxiv-pfbot.git
@@ -36,68 +38,71 @@ cd ffxiv-pfbot
 cp .env.example .env
 ```
 
-编辑 `.env`，将 `DISCORD_BOT_TOKEN` 替换为真实 Token。其他配置按需修改：
+Edit `.env` and replace `DISCORD_BOT_TOKEN` with your actual token. Adjust the other settings as needed:
 
-| 环境变量            | 默认值                       | 说明                                                                                                                     |
-| ------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `DISCORD_BOT_TOKEN` | 无，必填                     | Discord Bot Token。                                                                                                      |
-| `FETCH_CRON`        | `*/5 * * * *`                | 检查周期，默认每 5 分钟，使用运行时区。                                                                                  |
-| `DATABASE_PATH`     | `data/pfbot.sqlite`          | SQLite 路径，父目录自动创建；Compose 固定为 `/app/data/pfbot.sqlite`。                                                   |
-| `XIVPF_URL`         | `https://xivpf.com/listings` | 招募页面地址；调试页面需保持相同 HTML 结构。                                                                             |
-| `TZ`                | 无                           | Cron 和机器人状态显示使用的时区，如 `Asia/Shanghai`。示例配置和 Compose 使用 `UTC`；直接运行且未设置时使用运行环境时区。 |
+| Environment variable | Default                      | Description                                                                                                                                                                    |
+| -------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DISCORD_BOT_TOKEN`  | None; required               | Discord Bot Token.                                                                                                                                                             |
+| `FETCH_CRON`         | `*/5 * * * *`                | Check schedule; every 5 minutes by default, in the runtime time zone.                                                                                                          |
+| `DATABASE_PATH`      | `data/pfbot.sqlite`          | SQLite path. The parent directory is created automatically; Compose fixes this to `/app/data/pfbot.sqlite`.                                                                    |
+| `XIVPF_URL`          | `https://xivpf.com/listings` | Listings page URL. Any page used for debugging must have the same HTML structure.                                                                                              |
+| `TZ`                 | None                         | Time zone for cron and bot status, such as `Asia/Shanghai`. The example configuration and Compose use `UTC`; direct execution uses the runtime's time zone when this is unset. |
+| `LANGUAGE`           | `EN`                         | Language for Discord output and internal logs: `EN`, `CHS`, `DE`, `FR`, `JA`, or `KO`. Restart after changing it.                                                              |
 
-### 启动机器人
+The website is always fetched in English. `EN` keeps the original duty names and system tags; other languages translate game names, jobs, categories, and known system tags at the start of recruitment comments. Unknown names or missing translations remain in English. Player-written comments, character names, world names, and regular expressions retain their original values.
 
-两种方式任选其一。上线后会自动向已加入的服务器注册斜杠命令，加入新服务器时也会注册。监控启动约 5 秒后首次检查，之后按配置周期运行。
+### Start the bot
 
-**直接使用 Bun：**
+Choose either method below. Once online, the bot automatically registers slash commands in servers it has joined, and also registers them when joining a new server. The first check runs approximately 5 seconds after monitoring starts; subsequent checks follow the configured schedule.
+
+**Run directly with Bun:**
 
 ```bash
 bun install
 bun run start
 ```
 
-**使用 Docker Compose：**
+**Run with Docker Compose:**
 
 ```bash
-# 验证配置，构建并后台启动
+# Validate configuration, build, and start in the background
 docker compose config --quiet
 docker compose up -d --build
 
-# 查看状态和日志
+# View status and logs
 docker compose ps
 docker compose logs -f --tail=100 pfbot
 ```
 
-启动后，按[使用方法](#使用方法)创建订阅。
+After startup, follow [Usage](#usage) to create subscriptions.
 
-### 更新与维护
+### Updates and maintenance
 
-以下命令适用于 Docker Compose：
+The following commands apply to Docker Compose:
 
 ```bash
-# 更新代码并重新构建
+# Update the code and rebuild
 git pull --ff-only
 docker compose up -d --build
 
-# 修改 .env 后重新创建容器
+# Recreate the container after changing .env
 docker compose up -d --force-recreate
 
-# 重启
+# Restart
 docker compose restart pfbot
 
-# 停止并移除容器，保留数据卷
+# Stop and remove containers while keeping the data volume
 docker compose down
 ```
 
-容器默认留出 1 分钟等待任务结束，订阅量较大时可调高 `docker-compose.yml` 中的 `stop_grace_period`。日志按每文件 10 MiB、最多 3 个文件轮转。
+The container allows 1 minute for running tasks to finish before shutdown. For larger numbers of subscriptions, increase `stop_grace_period` in `docker-compose.yml`. Logs rotate at 10 MiB per file, keeping up to 3 files.
 
 <details>
-<summary>数据库备份、恢复与迁移</summary>
+<summary>Database backup, restoration, and migration</summary>
 
-订阅及推送状态存放在 `pfbot-data` 命名数据卷中，容器内路径为 `/app/data/pfbot.sqlite`。Compose 会覆盖 `.env` 中的 `DATABASE_PATH`；更换位置时须同时调整环境变量和卷挂载，确保数据库及 WAL 文件位于持久化目录中。
+Subscriptions and delivery state are stored in the named volume `pfbot-data`, at `/app/data/pfbot.sqlite` inside the container. Compose overrides `DATABASE_PATH` from `.env`. To change this location, adjust both the environment variable and the volume mount, ensuring that the database and WAL files remain in a persistent directory.
 
-备份前先停止机器人，复制整个数据目录；每次使用新的备份目标目录，并在 `docker compose down` 移除容器前完成：
+Stop the bot before backing up and copy the entire data directory. Use a new destination directory for each backup, and complete the backup before removing the container with `docker compose down`:
 
 ```bash
 docker compose stop pfbot
@@ -106,185 +111,192 @@ docker compose cp pfbot:/app/data ./backups/pfbot-data
 docker compose start pfbot
 ```
 
-恢复会替换现有数据库，请先备份原数据并停止原实例。备份应包含 `pfbot.sqlite` 及备份时存在的 `pfbot.sqlite-wal`、`pfbot.sqlite-shm` 文件。
+Restoration replaces the existing database. Back up the current data and stop the original instance first. A backup should contain `pfbot.sqlite` and any `pfbot.sqlite-wal` and `pfbot.sqlite-shm` files present at backup time.
 
 ```bash
-# 创建容器和数据卷，保持机器人停止
+# Create the container and data volume, keeping the bot stopped
 docker compose build
 docker compose create pfbot
 docker compose stop pfbot
 
-# 替换数据库并修正权限
+# Replace the database and fix permissions
 docker compose run --rm --no-deps --user root pfbot rm -f /app/data/pfbot.sqlite /app/data/pfbot.sqlite-wal /app/data/pfbot.sqlite-shm
 docker compose cp ./backups/pfbot-data/. pfbot:/app/data
 docker compose run --rm --no-deps --user root pfbot chown -R bun:bun /app/data
 docker compose up -d
 ```
 
-从直接运行迁移到 Compose 时，先停止原进程，再将恢复命令中的 `./backups/pfbot-data/.` 替换为原数据库目录（默认 `./data/.`）。
+To migrate from direct execution to Compose, stop the original process, then replace `./backups/pfbot-data/.` in the restoration commands with the original database directory (by default, `./data/.`).
 
 </details>
 
-## 使用方法
+## Usage
 
-你需要当前频道的**查看频道**和**管理频道**权限。请在希望接收推送的文字频道、公告频道或线程中操作；论坛帖子请进入帖子内使用命令，不支持私信。
+You need **View Channel** and **Manage Channels** permissions in the current channel. Run commands in the text channel, announcement channel, or thread where you want notifications. For forum posts, open the post and run commands inside it. Direct messages are not supported.
 
-以订阅 Mana 数据中心的绝境战或零式招募为例：
+The following example uses the `LANGUAGE=CHS` interface to subscribe to Ultimate or Savage listings on the Mana data center:
 
-1. 输入 `/subscribe`，打开订阅表单。
-2. 在「正则表达式」中填写 `(?i)(Ultimate|Savage)`。
-3. 在「数据中心」中选择 `Mana (JP)`。
-4. 在「招募类别」中选择「高难度任务」。
-5. 提交并确认收到创建成功的提示，等待下一轮检查。默认每 5 分钟检查一次，也会匹配网站上已有的有效招募。
+1. Run `/subscribe` to open the subscription form.
+2. Enter `(?i)(Ultimate|Savage)` in “Regular expression” (「正则表达式」).
+3. Select `Mana (JP)` under “Data centers” (「数据中心」).
+4. Select “High-end Duty” (「高难度任务」) under “Categories” (「招募类别」).
+5. Submit the form, confirm the success reply, and wait for the next check. Checks run every 5 minutes by default and also match active listings already on the website.
 
-数据中心和招募类别均可多选，留空表示该项不限。**同一项选中任意一个即可，不同项必须同时满足**：上述订阅要求招募位于 Mana、属于高难度任务，且英文副本名称或描述中包含 `Ultimate` 或 `Savage`。
+Data centers and categories both support multiple selections. Leaving either filter empty means any value is allowed. **A listing may match any selected value within a filter, but must satisfy all different filters**. The example above requires a listing on Mana, in the High-end Duty category, with `Ultimate` or `Savage` in its English duty name or original recruitment comment.
 
-### 填写匹配条件
+### Define matching criteria
 
-「正则表达式」是关键词匹配规则，必填，长度为 **1–1000 字符**，使用 RE2 语法。匹配范围是**网站上的英文副本名称和招募描述**，卡片中的中文副本译名不参与匹配。
+The “Regular expression” field defines the keyword matching rule. It is required, accepts **1–1000 characters**, and uses RE2 syntax. Matching uses **the English duty name on the website and the original recruitment comment**. Translated names on cards are never used for matching.
 
-机器人将英文副本名与招募描述用空格拼接后搜索，**命中其中一段文字即可**，通常无需在关键词两侧添加 `.*`。直接复制下方代码内容到表单，无需添加反引号或 `/…/i`；忽略大小写应写在表达式开头，如 `(?i)Savage`。
+The bot joins the English duty name and recruitment comment with a space, then searches the combined text. **Matching either part is sufficient**, so you usually do not need `.*` around a keyword. Copy the code below directly into the form, without backticks or `/…/i`. To ignore case, put the flag at the start of the expression, as in `(?i)Savage`.
 
-#### 按副本筛选
+#### Filter by duty
 
-以下示例面向指定任务名筛选：
+These examples filter for specific duty names:
 
-| 场景          | 正则表达式                   | 匹配文字举例                                                                                   |
-| ------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| 不限制文字    | `[\s\S]*`                    | 任意内容，仅按数据中心和招募类别筛选。                                                         |
-| 零式或绝境战  | `(?i)\b(Savage\|Ultimate)\b` | 英文副本名称中的 `(Savage)` 或 `(Ultimate)`。                                                  |
-| 极神          | `(?i)\bExtreme\b`            | 英文副本名称中的 `(Extreme)`；部分极神名称使用 `The Minstrel's Ballad`，需另加对应英文副本名。 |
-| 绝伊甸（FRU） | `(?i)(Futures Rewritten)`    | `Futures Rewritten (Ultimate)`。                                                               |
+| Use case                | Regular expression           | Example matches                                                                                                                 |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| No text restriction     | `[\s\S]*`                    | Any text; filter only by data center and category.                                                                              |
+| Savage or Ultimate      | `(?i)\b(Savage\|Ultimate)\b` | `(Savage)` or `(Ultimate)` in the English duty name.                                                                            |
+| Extreme trials          | `(?i)\bExtreme\b`            | `(Extreme)` in the English duty name. Some Extreme trials use `The Minstrel's Ballad`; add their English duty names separately. |
+| Futures Rewritten (FRU) | `(?i)(Futures Rewritten)`    | `Futures Rewritten (Ultimate)`.                                                                                                 |
 
-#### 按招募目的或描述筛选
+#### Filter by recruitment purpose or comment
 
-以下示例兼顾欧美服英文用语与日服日文用语：
+These examples cover English terms used on EU/NA servers and Japanese terms used on JP servers:
 
-| 场景                 | 正则表达式                                                 | 匹配文字举例                                                                                 |
-| -------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| 练习、推进度         | `(?i)(\b(practice\|prog(ression)?\|learning)\b\|練習)`     | `practice`、`P2 prog`、`progression`、`learning`、`後半練習`。                               |
-| 初见、从头练习       | `(?i)(\b(fresh\|blind)\b\|初見\|最初から)`                 | `fresh prog`、`blind run`、`初見歓迎`、`最初から練習`。                                      |
-| 过关、帮过           | `(?i)(\b(a2c\|c41\|clears?)\b\|クリア目的\|未クリア)`      | `A2C`（aim to clear）、`C41`（clear for one）、`clear party`、`クリア目的`、`未クリア歓迎`。 |
-| 周常、重复通关       | `(?i)(\b(reclears?\|weekly)\b\|消化)`                      | `weekly reclears`、`reclear party`、`今週分消化`。                                           |
-| 刷本、周回           | `(?i)(\bfarm(ing)?\b\|周回)`                               | `farm party`、`farming`、`周回PT`。                                                          |
-| 坐骑、图腾关键词     | `(?i)(\b(mounts?\|totems?\|wings?)\b\|マウント\|トーテム)` | `mount farm`、`totems`、`wing farm`、`マウント周回`、`トーテム集め`。                        |
-| 佣兵、报酬关键词     | `(?i)(\bmerc(enary\|enaries)?\b\|バイト\|報酬\|傭兵)`      | `merc`、`mercenary`、`mercenaries`、`バイト募集`、`報酬あり`。                               |
-| 宝图                 | `(?i)(\b(maps?\|treasure)\b\|地図)`                        | `maps`、`treasure maps`、`地図PT`。                                                          |
-| 青魔                 | `(?i)(\b(BLU\|Blue Mage)\b\|青魔)`                         | `BLU spell learning`、`Blue Mage`、`青魔法ラーニング`。                                      |
-| 最低装等挑战关键词   | `(?i)(\bMINE\b\|minimum\s+item\s+level\|下限)`             | `MINE`（minimum item level, no echo）、`minimum item level`、`下限`。                        |
-| 指定攻略、打法关键词 | `(?i)(\bHector\b\|ぬけまる\|ハムカツ)`                     | `Hector strat`、`ぬけまる式`、`ハムカツ式`。                                                 |
+| Use case                                | Regular expression                                         | Example matches                                                                           |
+| --------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Practice or progression                 | `(?i)(\b(practice\|prog(ression)?\|learning)\b\|練習)`     | `practice`, `P2 prog`, `progression`, `learning`, `後半練習`.                             |
+| First-time or fresh progression         | `(?i)(\b(fresh\|blind)\b\|初見\|最初から)`                 | `fresh prog`, `blind run`, `初見歓迎`, `最初から練習`.                                    |
+| Clear attempts or helping someone clear | `(?i)(\b(a2c\|c41\|clears?)\b\|クリア目的\|未クリア)`      | `A2C` (aim to clear), `C41` (clear for one), `clear party`, `クリア目的`, `未クリア歓迎`. |
+| Weekly clears or reclears               | `(?i)(\b(reclears?\|weekly)\b\|消化)`                      | `weekly reclears`, `reclear party`, `今週分消化`.                                         |
+| Farming                                 | `(?i)(\bfarm(ing)?\b\|周回)`                               | `farm party`, `farming`, `周回PT`.                                                        |
+| Mount or totem keywords                 | `(?i)(\b(mounts?\|totems?\|wings?)\b\|マウント\|トーテム)` | `mount farm`, `totems`, `wing farm`, `マウント周回`, `トーテム集め`.                      |
+| Mercenary or payment keywords           | `(?i)(\bmerc(enary\|enaries)?\b\|バイト\|報酬\|傭兵)`      | `merc`, `mercenary`, `mercenaries`, `バイト募集`, `報酬あり`.                             |
+| Treasure maps                           | `(?i)(\b(maps?\|treasure)\b\|地図)`                        | `maps`, `treasure maps`, `地図PT`.                                                        |
+| Blue Mage                               | `(?i)(\b(BLU\|Blue Mage)\b\|青魔)`                         | `BLU spell learning`, `Blue Mage`, `青魔法ラーニング`.                                    |
+| Minimum item level challenges           | `(?i)(\bMINE\b\|minimum\s+item\s+level\|下限)`             | `MINE` (minimum item level, no echo), `minimum item level`, `下限`.                       |
+| Specific guides or strategies           | `(?i)(\bHector\b\|ぬけまる\|ハムカツ)`                     | `Hector strat`, `ぬけまる式`, `ハムカツ式`.                                               |
 
-#### RE2 语法提示
+#### RE2 syntax tips
 
-- `(?i)`：忽略英文字母大小写，例如 `prog` 也能匹配 `PROG`。
-- `\b`：ASCII 单词边界，适合英文缩写，例如 `\bTEA\b` 不会匹配 `team`；不要直接套在日文或中文关键词两侧。
-- `\s*` / `\s+`：零个或多个 / 一个或多个空白字符；括号等特殊字符若需按字面匹配，应转义，例如 `\(Savage\)`。
-- RE2 **不支持前瞻、后顾或反向引用**，例如 `(?=...)`、`(?!...)`、`(?<=...)`、`(?<!...)`、`\1`。不要用 `(?=.*Savage)(?=.*prog)` 表达两个关键词同时存在，应使用上面的顺序组合。
+- `(?i)`: Ignore case for English letters; for example, `prog` also matches `PROG`.
+- `\b`: An ASCII word boundary, useful for English abbreviations. For example, `\bTEA\b` does not match `team`. Do not put it directly around Japanese or Chinese keywords.
+- `\s*` / `\s+`: Zero or more / one or more whitespace characters. Escape special characters such as parentheses when matching them literally; for example, `\(Savage\)`.
+- RE2 **does not support lookahead, lookbehind, or backreferences**, including `(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`, and `\1`. Do not use `(?=.*Savage)(?=.*prog)` to require both keywords; instead, combine the keywords in sequence.
 
-更多语法见 [RE2 官方语法说明](https://github.com/google/re2/wiki/Syntax)。
+See the [official RE2 syntax reference](https://github.com/google/re2/wiki/Syntax) for more details.
 
-### 管理订阅与消息
+### Manage subscriptions and messages
 
-所有命令只作用于**当前服务器的当前频道或线程**。订阅由频道共享，具备上述权限的用户均可管理。
+All commands apply only to **the current channel or thread in the current server**. Subscriptions are shared by the channel, and anyone with the required permissions can manage them.
 
-| 命令           | 用途                                                                             |
-| -------------- | -------------------------------------------------------------------------------- |
-| `/subscribe`   | 创建新的招募订阅。                                                               |
-| `/list`        | 查看当前频道已有订阅。                                                           |
-| `/edit`        | 选择订阅，修改表单并提交；新条件在下一轮检查生效。                               |
-| `/unsubscribe` | 选择并取消订阅，停止按该条件推送。                                               |
-| `/clear`       | 清理当前频道已结束的招募消息及推送记录。                                         |
-| `/reset`       | 选择一个订阅或「全部订阅」，立即强制清理关联消息及推送记录，包括尚未结束的招募。 |
+| Command        | Purpose                                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/subscribe`   | Create a Party Finder subscription.                                                                                                                |
+| `/list`        | View existing subscriptions in the current channel.                                                                                                |
+| `/edit`        | Select a subscription, edit its form, and submit. New criteria take effect on the next check.                                                      |
+| `/unsubscribe` | Select and cancel a subscription, stopping notifications for those criteria.                                                                       |
+| `/clear`       | Remove messages and delivery records for ended listings in the current channel.                                                                    |
+| `/reset`       | Select one subscription or “All subscriptions” to immediately force-clear its associated messages and delivery records, including active listings. |
 
-`/list`、`/edit`、`/unsubscribe`、`/reset` 支持翻页，也可填写 `page` 指定页码，例如 `/list page:2`；省略时从第 1 页开始。
+`/list`, `/edit`, `/unsubscribe`, and `/reset` support pagination. You can also specify a page with `page`, as in `/list page:2`; the default is page 1.
 
-命令回复仅自己可见，招募推送则对频道成员可见。菜单和表单在 **2 分钟**后失效，超时后请重新运行命令。创建或编辑只有在提交成功后才保存；关闭、超时、正则无效或与频道内其他订阅条件完全相同时，均不会保存变更。
+Command replies are visible only to you, while recruitment notifications are visible to channel members. Menus and forms expire after **2 minutes**; rerun the command if it times out. Creation and editing are saved only after a successful submission. Closing the form, timing out, entering an invalid regular expression, or duplicating another subscription's exact criteria in the channel does not save changes.
 
-清理消息时请区分：
+Keep the following in mind when clearing messages:
 
-- **取消或修改订阅不会立即删除已有消息**，这些消息仍会在招募结束后自动清理。若招募匹配其他订阅，仍可继续推送或更新。
-- **`/clear` 和 `/reset` 都保留订阅设置**，仅处理机器人记录的招募消息，不会清空频道内的其他消息。
-- **`/reset` 选择后立即执行**。若消息被多个订阅共同匹配，选择其中一个也会删除该消息；仍符合订阅条件的有效招募可在下一轮重新推送。
-- 「全部订阅」覆盖当前频道的所有推送记录，包括已取消订阅留下的记录，即使频道已无订阅也可使用。若提示旧记录无法归属到单个订阅，可用此选项清理。
-- 清理失败的记录会保留，回复中会显示失败数量；修复权限或网络问题后可再次执行。
+- **Canceling or editing a subscription does not immediately delete existing messages**. Those messages are still removed automatically when recruitment ends. Listings that match other subscriptions can continue to be sent or updated.
+- **`/clear` and `/reset` both keep subscription settings**. They affect only recruitment messages recorded by the bot and do not clear other messages in the channel.
+- **`/reset` runs immediately after selection**. If multiple subscriptions match a message, selecting any one of them also deletes that shared message. Active listings that still match a subscription can be sent again on the next check.
+- “All subscriptions” covers all delivery records in the current channel, including records left by canceled subscriptions. It is available even if the channel has no subscriptions. Use it if a reply says older records cannot be assigned to an individual subscription.
+- Records that fail to clear are kept, and the reply shows the failure count. Fix permission or network issues, then run the command again.
 
-### 推送与自动清理规则
+### Delivery and automatic cleanup
 
-同一频道内，同一个招募 ID 只保留一条推送，多个订阅命中时合并显示匹配条件。仍符合订阅条件的招募内容变化时更新原消息，未变化则跳过。
+Each channel keeps only one message per listing ID. When multiple subscriptions match, the message combines their matching criteria. If a matching listing's content changes, the bot updates the existing message; unchanged content is skipped.
 
-每轮检查后，机器人会清理满足以下任一条件的消息：
+After each check, the bot removes messages that satisfy any of these conditions:
 
-- 招募已从成功读取的网站列表中消失。
-- 招募已到期，期限以网站提供的剩余时间刷新。
-- 网站显示该招募上次被抓取距今已达 10 分钟，机器人将其视为已结束。这里指网站上的招募更新时间，并非机器人连续运行了 10 分钟。
+- The listing has disappeared from a successfully fetched website list.
+- The listing has expired. Its expiry is refreshed using the remaining time reported by the website.
+- The website says the listing was last retrieved at least 10 minutes ago. The bot treats it as ended. This refers to the listing's update time on the website, not how long the bot has been running.
 
-取消全部订阅后，已有消息仍会自动清理。网站读取失败时，仅按已记录的到期时间清理；频道暂时不可访问或发送失败时保留订阅，恢复后继续处理仍符合条件的招募。
+Existing messages continue to be cleaned up after all subscriptions are canceled. If fetching fails, cleanup uses only previously recorded expiry times. If a channel is temporarily inaccessible or sending fails, subscriptions are kept, and matching listings are processed again when access recovers.
 
-手动删除推送不保证下一轮补发：只有招募仍匹配且待推送内容变化时，机器人才会尝试更新并补发。需要重新推送时，可用 `/reset` 清除相应记录。
+Manually deleting a notification does not guarantee that it will be sent again on the next check. The bot attempts to update and resend it only when the listing still matches and the outgoing content has changed. To resend a listing, use `/reset` to remove its delivery record.
 
-## 项目开发
+## Development
 
-安装依赖并配置 `.env` 后，可使用以下命令：
+After installing dependencies and configuring `.env`, use these commands:
 
 ```bash
-bun run start       # 启动
-bun run lint        # 代码风格检查
-bun run lint:fix    # 自动修复格式和风格问题
-bun run typecheck   # TypeScript 类型检查
-bun run test        # 自动化测试
+bun run start       # Start the bot
+bun run lint        # Check code style
+bun run lint:fix    # Automatically fix formatting and style issues
+bun run typecheck   # Check TypeScript types
+bun run test        # Run automated tests
 ```
 
-翻译词典来自 `ffxiv-data` Git 子模块，运行时使用已构建的词典。更新游戏数据并重新生成：
+Translation dictionaries come from the `ffxiv-data` Git submodule. The runtime uses the prebuilt dictionaries committed to the repository, so Docker does not need game data or build tools at runtime. Update the game data and generate dictionaries for all five target languages with:
 
 ```bash
 bun run build:dict
 ```
 
-### 实现结构
+To rebuild using only the game data already available locally, run `bun run scripts/build-dict.ts`. Building is independent of `LANGUAGE`. Output goes to `src/locales/generated/`, aligning English and target-language text by game data row ID. The build reports missing translations, conflicts, and control-code handling statistics. Later sources override earlier nonempty translations. Korean data may be older; entries without translations stay in English at runtime. Soft hyphens and italic control codes are removed, and nonbreaking spaces become ordinary spaces. Unknown control codes cause the translation entry to be skipped and counted in the statistics.
 
-项目使用 discord.js 处理命令和消息，Cheerio 解析页面，RE2JS 校验和执行正则，`bun:sqlite` 保存状态。文件树结构如下：
+Manually maintained interface text and log messages are stored in `src/locales/{en,chs,de,fr,ja,ko}.ts`. Do not edit generated dictionaries by hand. All six locale packs follow the same TypeScript interface; update every language when adding or changing text.
+
+### Implementation structure
+
+The project uses discord.js for commands and messages, Cheerio to parse pages, RE2JS to validate and execute regular expressions, and `bun:sqlite` to persist state. The file layout is:
 
 ```text
 ffxiv-pfbot/
 ├── src/
-│   ├── index.ts                   # 启动、命令注册与进程关闭
-│   ├── commands/                  # 订阅管理及清理命令入口
+│   ├── index.ts                   # Startup, command registration, and shutdown
+│   ├── commands/                  # Subscription management and cleanup commands
 │   ├── services/
-│   │   ├── fetcher.ts             # 抓取并解析招募页面
-│   │   ├── monitor.ts             # 定时检查、匹配订阅及更新消息
-│   │   ├── listing-state.ts       # 刷新招募期限及过期标记
-│   │   ├── cleanup.ts             # 自动、手动及强制清理
-│   │   ├── tasks.ts               # 串行任务队列及机器人状态
-│   │   ├── store.ts               # SQLite 存储及订阅校验
-│   │   ├── subscription-form.ts   # 创建和编辑订阅的表单
-│   │   └── subscription-pager.ts  # 订阅列表及操作菜单的分页交互
-│   ├── utils/                     # 权限检查、消息构建、时间解析和日志
-│   ├── locales/zh-cn.ts           # 筛选项、职业及招募标签的中文名称
-│   ├── constants/dict-zh-cn.ts    # 自动生成的副本名称词典
-│   └── types/                     # 命令及招募数据类型
-├── scripts/build-dict.ts          # 从游戏数据生成词典
-├── tests/                         # 自动化测试及辅助工具
-├── ffxiv-data/                    # 游戏数据 Git 子模块
-├── docs/preview.png               # 推送效果预览
-├── package.json                   # 依赖、运行脚本及 Bun 版本要求
-├── bun.lock                       # 依赖锁定文件
-├── tsconfig.json                  # TypeScript 配置
-├── eslint.config.js               # 代码检查配置
-├── .prettierrc                    # 格式化配置
-├── .husky/pre-commit              # 提交前检查
-├── Dockerfile                     # Bun 运行镜像
-├── docker-compose.yml             # 容器部署及 SQLite 数据卷
-├── .dockerignore                  # Docker 构建排除规则
-└── .env.example                   # 环境变量配置示例
+│   │   ├── fetcher.ts             # Fetch and parse the listings page
+│   │   ├── monitor.ts             # Scheduled checks, matching, and message updates
+│   │   ├── listing-state.ts       # Refresh expiry times and expired-listing markers
+│   │   ├── cleanup.ts             # Automatic, manual, and forced cleanup
+│   │   ├── tasks.ts               # Serial task queue and bot status
+│   │   ├── store.ts               # SQLite storage and subscription validation
+│   │   ├── subscription-form.ts   # Forms for creating and editing subscriptions
+│   │   └── subscription-pager.ts  # Paginated subscription lists and action menus
+│   ├── utils/                     # Permissions, messages, time parsing, and logging
+│   ├── locales/                   # Six-language text, configuration, and formatting
+│   │   ├── generated/             # Generated game-name dictionaries for five languages
+│   │   └── utils/                 # Localization utilities
+│   ├── constants/recruitment.ts   # Language-independent filters and identifiers
+│   └── types/                     # Command and recruitment data types
+├── scripts/build-dict.ts          # Generate five-language dictionaries from game data
+├── tests/                         # Automated tests and helpers
+├── ffxiv-data/                    # Game data Git submodule
+├── docs/preview.png               # Notification preview
+├── docs/README-chs.md             # Simplified Chinese README
+├── package.json                   # Dependencies, scripts, and Bun version requirement
+├── bun.lock                       # Dependency lockfile
+├── tsconfig.json                  # TypeScript configuration
+├── eslint.config.js               # Lint configuration
+├── .prettierrc                    # Formatter configuration
+├── .husky/pre-commit              # Pre-commit checks
+├── Dockerfile                     # Bun runtime image
+├── docker-compose.yml             # Container deployment and SQLite data volume
+├── .dockerignore                  # Docker build exclusions
+└── .env.example                   # Example environment configuration
 ```
 
-监控流程为：**抓取列表 → 刷新期限 → 匹配订阅 → 发送或更新 → 清理结束招募**。监控、手动清理和定时清理共用串行队列；监控后的清理复用本轮抓取结果。每次清理完成后重新计时，1 小时后执行兜底清理。没有订阅、推送记录或过期标记时，监控跳过抓取。
+The monitoring flow is **fetch listings → refresh expiry times → match subscriptions → send or update → clean up ended listings**. Monitoring, manual cleanup, and scheduled cleanup share a serial queue. Cleanup after monitoring reuses the current fetch results. Each completed cleanup resets a timer for a fallback cleanup 1 hour later. Monitoring skips fetching when there are no subscriptions, delivery records, or expired-listing markers.
 
-SQLite 保存订阅、推送记录、订阅与消息的关联及过期标记，使用 WAL 和事务保护更新。发送或编辑成功后才保存消息 ID 和内容摘要；删除失败保留记录以供重试。期限独立刷新，不受内容是否变化、订阅是否取消或频道是否可访问影响。期限无法解析时保留原值，新推送按首次观察后 1 小时到期处理。
+SQLite stores subscriptions, delivery records, subscription-message associations, and expired-listing markers, using WAL and transactions to protect updates. Message IDs and content hashes are saved only after sending or editing succeeds. Failed deletions keep their records for retries. Expiry times are refreshed independently of content changes, subscription cancellation, or channel accessibility. If an expiry cannot be parsed, its previous value is kept; new notifications expire 1 hour after the listing is first observed.
 
-### 扩展与排查
+### Extending and troubleshooting
 
-- **新增命令**：在 `src/commands/` 新建 `.ts` 文件，导出 `data` 和 `execute`，入口会自动加载；契约见 `src/types/command.ts`。
-- **修改筛选或展示**：筛选项和标签见 `src/locales/zh-cn.ts`，消息格式见 `src/utils/embed.ts`；保持表单校验、监控筛选及 Discord 消息长度限制一致。
-- **适配网站变化**：修改 `fetcher.ts`，验证正常列表、空列表及异常页面。请求超时为 30 秒，解压后的 HTML 上限为 16 MiB；非 HTML、缺少列表容器或招募 ID 均视为失败。
-- **查看日志**：格式为 `[UTC 时间] [级别] [模块] 消息`，附带频道、招募或消息 ID 等上下文，涵盖启动、订阅变更、抓取、投递和清理结果。
+- **Add a command**: Create a `.ts` file in `src/commands/` and export `data` and `execute`; the entry point loads it automatically. See `src/types/command.ts` for the contract.
+- **Change filters or presentation**: Valid filter values are in `src/constants/recruitment.ts`, translations and labels in `src/locales/`, and message formatting in `src/utils/embed.ts`. Display labels can be translated, while filter values and database identifiers must remain stable. Check Discord's length limits after localization.
+- **Adapt to website changes**: Update `fetcher.ts` and verify normal listings, empty listings, and invalid pages. Requests time out after 30 seconds, and decompressed HTML is limited to 16 MiB. Non-HTML responses, a missing listings container, or missing listing IDs are treated as failures.
+- **Inspect logs**: Entries use `[UTC timestamp] [level] [module] message` and include context such as channel, listing, or message IDs. They cover startup, subscription changes, fetching, delivery, and cleanup. Messages and module labels follow `LANGUAGE`; timestamps remain in UTC, and structured context keys and external error details keep their original values.

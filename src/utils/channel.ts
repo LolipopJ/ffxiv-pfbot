@@ -9,6 +9,7 @@ import {
   Routes,
 } from "discord.js";
 
+import { type Locale, locale } from "../locales";
 import type { ChannelScope } from "../services/store";
 
 export function isNotificationChannel(
@@ -31,9 +32,10 @@ export function getCommandContext(
     | ChatInputCommandInteraction
     | MessageComponentInteraction
     | ModalSubmitInteraction,
+  language: Locale = locale,
 ) {
   if (!interaction.inGuild() || !interaction.guildId) {
-    return { ok: false as const, reason: "请在服务器频道中使用此命令。" };
+    return { ok: false as const, reason: language.messages.errors.guildOnly };
   }
   const channel = interaction.channel;
   if (
@@ -43,7 +45,7 @@ export function getCommandContext(
   ) {
     return {
       ok: false as const,
-      reason: "仅支持当前文字频道、公告频道或线程。",
+      reason: language.messages.errors.channelOnly,
     };
   }
   if (
@@ -54,7 +56,7 @@ export function getCommandContext(
   ) {
     return {
       ok: false as const,
-      reason: "你需要当前频道的查看频道和管理频道权限。",
+      reason: language.messages.errors.userPermissions,
     };
   }
   const scope: ChannelScope = {
@@ -64,9 +66,12 @@ export function getCommandContext(
   return { ok: true as const, channel, scope };
 }
 
-export async function getBotSendError(channel: GuildTextBasedChannel) {
+export async function getBotSendError(
+  channel: GuildTextBasedChannel,
+  language: Locale = locale,
+) {
   if (channel.isThread() && (channel.archived || channel.locked)) {
-    return "线程已归档或锁定，请先恢复线程。";
+    return language.messages.errors.threadClosed;
   }
   const member = await channel.guild.members.fetchMe({ force: true });
   const sendPermission = channel.isThread()
@@ -80,10 +85,10 @@ export async function getBotSendError(channel: GuildTextBasedChannel) {
       PermissionFlagsBits.EmbedLinks,
     ])
   ) {
-    return "机器人需要当前频道的查看频道、发送消息和嵌入链接权限。";
+    return language.messages.errors.botPermissions;
   }
   if (member.isCommunicationDisabled()) {
-    return "机器人当前被禁言，请先解除禁言。";
+    return language.messages.errors.botTimedOut;
   }
   if (
     channel.type === ChannelType.PrivateThread &&
@@ -101,7 +106,7 @@ export async function getBotSendError(channel: GuildTextBasedChannel) {
         "code" in error &&
         [10003, 10007, 50001, 50013].includes(Number(error.code))
       ) {
-        return "机器人无法访问此私密线程，请先将机器人加入线程并检查权限。";
+        return language.messages.errors.privateThread;
       }
       throw error;
     }

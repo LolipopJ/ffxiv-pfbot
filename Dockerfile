@@ -9,7 +9,8 @@ RUN bun install --frozen-lockfile --production --ignore-scripts
 FROM base AS runtime
 ENV NODE_ENV=production \
     DATABASE_PATH=/app/data/pfbot.sqlite \
-    TZ=UTC
+    TZ=UTC \
+    LANGUAGE=EN
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
