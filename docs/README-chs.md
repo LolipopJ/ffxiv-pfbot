@@ -3,7 +3,7 @@
 [English](../README.md) | 简体中文
 
 <div align="center">
-  <img src="./preview.png" alt="Discord 招募推送预览" height="320" />
+  <img src="./preview-chs.png" alt="Discord 招募推送预览" height="320" />
 </div>
 
 面向《最终幻想 XIV》（FF14）国际服玩家的 Discord 招募订阅机器人。定时读取 [xivpf.com](https://xivpf.com/listings) 的招募信息，按关键词、数据中心和招募类别筛选，推送到指定频道。
