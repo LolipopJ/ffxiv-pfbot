@@ -51,7 +51,7 @@ export function createMonitor(
   cleanup = createCleanup(client, store, fetchListings, now),
   language: Locale = locale,
 ) {
-  let inFlight: Promise<number | undefined> | undefined;
+  let inFlight: Promise<void> | undefined;
 
   const notify = async (snapshot: CleanupSnapshot) => {
     const startedAt = now();
@@ -248,11 +248,18 @@ export function createMonitor(
   };
 
   return {
-    check(): Promise<number | undefined> {
+    check(onFetched?: (count: number | undefined) => void): Promise<void> {
       if (inFlight) return inFlight;
       const snapshot: CleanupSnapshot = { fetchFailed: false };
       const monitoring = getTaskRunner(client)
-        .run("fetching", () => notify(snapshot))
+        .run("fetching", async () => {
+          try {
+            await notify(snapshot);
+          } finally {
+            // Update the schedule before the runner publishes its idle presence.
+            onFetched?.(snapshot.listings?.size);
+          }
+        })
         .catch((error) => {
           logger.error("monitor", "monitorFailed", { error });
         });
@@ -261,7 +268,7 @@ export function createMonitor(
         logger.error("cleanup", "monitorCleanupFailed", { error });
       });
       return (inFlight = Promise.all([monitoring, clearing])
-        .then(() => snapshot.listings?.size)
+        .then(() => {})
         .finally(() => {
           inFlight = undefined;
         }));
@@ -286,21 +293,22 @@ export function startMonitor(client: Client) {
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const check = async () => {
     if (stopped) return;
-    const count = await monitor.check();
-    if (stopped) return;
-    if (count === 0 || (retryTimer !== undefined && count === undefined)) {
-      job.stop();
-      clearTimeout(initialCheck);
-      clearTimeout(retryTimer);
-      const retryDelay = 60 * 60 * 1000;
-      runner.setNextRunAt(new Date(Date.now() + retryDelay));
-      retryTimer = setTimeout(() => void check(), retryDelay);
-    } else if (count !== undefined && retryTimer !== undefined) {
-      clearTimeout(retryTimer);
-      retryTimer = undefined;
-      job = Bun.cron(cronExpr, check);
-      runner.setNextRunAt();
-    }
+    await monitor.check((count) => {
+      if (stopped) return;
+      if (count === 0 || (retryTimer !== undefined && count === undefined)) {
+        job.stop();
+        clearTimeout(initialCheck);
+        clearTimeout(retryTimer);
+        const retryDelay = 60 * 60 * 1000;
+        runner.setNextRunAt(new Date(Date.now() + retryDelay));
+        retryTimer = setTimeout(() => void check(), retryDelay);
+      } else if (count !== undefined && retryTimer !== undefined) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+        job = Bun.cron(cronExpr, check);
+        runner.setNextRunAt();
+      }
+    });
   };
   let job = Bun.cron(cronExpr, check);
   const initialCheck = setTimeout(() => void check(), 5000);

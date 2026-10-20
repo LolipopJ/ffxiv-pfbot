@@ -201,3 +201,28 @@ test("updating the next execution time preserves the status of a running task", 
     }),
   );
 });
+
+test("maintenance deadline is visible within Discord's first five presence updates", async () => {
+  const client = fakeClient([]);
+  const visible: PresenceData[] = [];
+  let updates = 0;
+  Object.assign(client, {
+    user: {
+      setPresence: (presence: PresenceData) => {
+        if (++updates <= 5) visible.push(presence);
+      },
+    },
+  });
+  getTaskRunner(client, LOCALES.EN);
+  stop = startMonitor(client);
+  await tick();
+  expect(updates).toBeLessThanOrEqual(5);
+  expect(
+    visible.slice(1).map((presence) => presence.activities?.[0]?.name),
+  ).not.toContain(visible[0]?.activities?.[0]?.name);
+  expect(visible.at(-1)?.activities?.[0]?.name).toContain(
+    new Date(time + 3_600_000).toLocaleString(LOCALES.EN.intlLocale, {
+      hour12: false,
+    }),
+  );
+});
