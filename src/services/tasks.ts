@@ -13,8 +13,11 @@ export function createTaskRunner(
 ) {
   let tail = Promise.resolve();
   let stopped = false;
+  let nextRunAt: Date | undefined;
+  let currentState: TaskState = "idle";
 
   const show = (state: TaskState) => {
+    currentState = state;
     try {
       let name = "";
       switch (state) {
@@ -28,10 +31,10 @@ export function createTaskRunner(
         default:
           name = language.messages.presence.next({
             time:
-              Bun.cron
-                .parse(cron, Date.now())
-                ?.toLocaleString(language.intlLocale, { hour12: false }) ??
-              language.messages.presence.noNextTime,
+              (nextRunAt ?? Bun.cron.parse(cron, Date.now()))?.toLocaleString(
+                language.intlLocale,
+                { hour12: false },
+              ) ?? language.messages.presence.noNextTime,
           });
       }
       client.user?.setPresence({
@@ -51,6 +54,10 @@ export function createTaskRunner(
 
   return {
     cron,
+    setNextRunAt(time?: Date) {
+      nextRunAt = time;
+      if (currentState === "idle") show("idle");
+    },
     run<T>(state: TaskState, task: () => Promise<T>): Promise<T> {
       if (stopped)
         return Promise.reject(

@@ -51,7 +51,7 @@ export function createMonitor(
   cleanup = createCleanup(client, store, fetchListings, now),
   language: Locale = locale,
 ) {
-  let inFlight: Promise<void> | undefined;
+  let inFlight: Promise<number | undefined> | undefined;
 
   const notify = async (snapshot: CleanupSnapshot) => {
     const startedAt = now();
@@ -248,7 +248,7 @@ export function createMonitor(
   };
 
   return {
-    check(): Promise<void> {
+    check(): Promise<number | undefined> {
       if (inFlight) return inFlight;
       const snapshot: CleanupSnapshot = { fetchFailed: false };
       const monitoring = getTaskRunner(client)
@@ -261,7 +261,7 @@ export function createMonitor(
         logger.error("cleanup", "monitorCleanupFailed", { error });
       });
       return (inFlight = Promise.all([monitoring, clearing])
-        .then(() => {})
+        .then(() => snapshot.listings?.size)
         .finally(() => {
           inFlight = undefined;
         }));
@@ -280,16 +280,39 @@ export function startMonitor(client: Client) {
     Date.now,
     getCleanup(client),
   );
-  const cronExpr = getTaskRunner(client).cron;
-  const job = Bun.cron(cronExpr, () => monitor.check());
-  const initialCheck = setTimeout(() => void monitor.check(), 5000);
+  const runner = getTaskRunner(client);
+  const cronExpr = runner.cron;
+  let stopped = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const check = async () => {
+    if (stopped) return;
+    const count = await monitor.check();
+    if (stopped) return;
+    if (count === 0 || (retryTimer !== undefined && count === undefined)) {
+      job.stop();
+      clearTimeout(initialCheck);
+      clearTimeout(retryTimer);
+      const retryDelay = 60 * 60 * 1000;
+      runner.setNextRunAt(new Date(Date.now() + retryDelay));
+      retryTimer = setTimeout(() => void check(), retryDelay);
+    } else if (count !== undefined && retryTimer !== undefined) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+      job = Bun.cron(cronExpr, check);
+      runner.setNextRunAt();
+    }
+  };
+  let job = Bun.cron(cronExpr, check);
+  const initialCheck = setTimeout(() => void check(), 5000);
   logger.info("monitor", "monitorStarted", {
     cron: cronExpr,
     initialDelayMs: 5000,
   });
   return async () => {
+    stopped = true;
     job.stop();
     clearTimeout(initialCheck);
+    clearTimeout(retryTimer);
     await monitor.idle();
     logger.info("monitor", "monitorStopped");
   };
