@@ -48,12 +48,12 @@ test("long party fields hide optional jobs while preserving occupied and vacant 
   expect(result.length).toBeLessThanOrEqual(1024);
 });
 
-test("short party fields retain selectable jobs", () => {
+test("short party fields retain selectable job abbreviations", () => {
   expect(
     buildPartyField([
       { filled: false, role: ["dps"], acceptedJobs: ["MNK", "SAM"] },
     ]),
-  ).toBe("❓️武僧, 武士");
+  ).toBe("❓️MNK, SAM");
 });
 
 test("all embed fields and aggregate content stay inside Discord limits", () => {

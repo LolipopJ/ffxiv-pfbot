@@ -50,7 +50,6 @@ export function createTaskRunner(
       logger.warn("presence", "presenceFailed", { error });
     }
   };
-  show("idle");
 
   return {
     cron,

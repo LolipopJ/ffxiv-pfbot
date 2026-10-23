@@ -94,6 +94,22 @@ function start() {
   return presences;
 }
 
+test("startup waits for the first check before publishing presence", async () => {
+  const presences = start();
+  expect(presences).toHaveLength(0);
+  expect(fetch).not.toHaveBeenCalled();
+
+  await tick(4999);
+  expect(presences).toHaveLength(0);
+  expect(fetch).not.toHaveBeenCalled();
+
+  await tick(1);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(presences[0]?.activities?.[0]?.name).toBe(
+    LOCALES.EN.messages.presence.fetching,
+  );
+});
+
 test("empty source listings retry one hour later until nonempty listings restore the custom cron", async () => {
   const presences = start();
   const stopCron = spyOn(jobs[0]!, "stop");

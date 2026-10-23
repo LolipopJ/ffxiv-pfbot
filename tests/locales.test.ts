@@ -77,7 +77,7 @@ test.each([...LANGUAGES])(
         [{ filled: false, role: ["tank"], acceptedJobs: ["PLD", "ANY"] }],
         language,
       ),
-    ).toBe(`❓️${language.jobs.PLD}, ${language.jobs.ANY}`);
+    ).toBe("❓️PLD, ANY");
   },
 );
 
@@ -384,7 +384,7 @@ test.each([...LANGUAGES])(
     const runner = createTaskRunner(client, "*/5 * * * *", language);
     try {
       await runner.run("fetching", async () => {});
-      expect(states[1]!.activities![0]).toMatchObject({
+      expect(states[0]!.activities![0]).toMatchObject({
         name: language.messages.presence.fetching,
         type: ActivityType.Playing,
       });
